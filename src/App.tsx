@@ -145,6 +145,12 @@ const simpleIcon = divIcon({
   iconAnchor: [18, 18],
 });
 
+const userIcon = divIcon({
+  className: 'bg-emerald-500 w-9 h-9 rounded-full border-2 border-white shadow-md flex items-center justify-center animate-pulse',
+  iconSize: [24, 24],
+  iconAnchor: [18, 18],
+});
+
 export default function App() {
   // Inputs state
   const [address, setAddress] = useState("Botany Town Centre, Auckland");
@@ -207,10 +213,12 @@ export default function App() {
 
   // AI Matching Fine-Tuning State
   const [customRules, setCustomRules] = useState<Record<string, { include: string; exclude: string; customPrompt: string }>>({});
+  const [renderTrigger, setRenderTrigger] = useState(0);
   const [tuningIngredient, setTuningIngredient] = useState<string | null>(null);
   const [tuneInclude, setTuneInclude] = useState("");
   const [tuneExclude, setTuneExclude] = useState("");
   const [tunePrompt, setTunePrompt] = useState("");
+  const [btnAnimation, setBtnAnimation] = useState(false);
 
   // Chat State
   const [chatMessage, setChatMessage] = useState("");
@@ -219,22 +227,32 @@ export default function App() {
 
   // References
   const logEndRef = useRef<HTMLDivElement>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
   const agentChatEndRef = useRef<HTMLDivElement>(null);
-
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   // Append logs function
   const addLog = (text: string) => {
     const time = new Date().toLocaleTimeString();
     setLogs((prev) => [...prev, { time, text }]);
   };
 
-  // Scroll logs and agent chat to bottom
+  // Scroll logs to bottom within their own container
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
   }, [logs]);
 
+  // useEffect(() => {
+  //   agentChatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  // }, [agentHistory]);
+
   useEffect(() => {
-    agentChatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  if (chatContainerRef.current) {
+    chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+  }
   }, [agentHistory]);
+
 
   // Handle address geocoding & auto GPS
   const detectGPS = () => {
@@ -481,6 +499,12 @@ export default function App() {
   };
 
   const applyCustomRulesForIngredient = (ingName: string) => {
+    const hasFilters = tuneInclude.trim() || tuneExclude.trim() || tunePrompt.trim();
+    addLog(`Applying custom AI filters for "${ingName}"...`);
+    setBtnAnimation(true);
+    setTimeout(() => setBtnAnimation(false), 2000);
+    setRenderTrigger(prev => prev + 1);
+
     const updatedRules = {
       ...customRules,
       [ingName]: {
@@ -490,8 +514,11 @@ export default function App() {
       }
     };
     setCustomRules(updatedRules);
-    addLog(`Applying custom AI filters for "${ingName}"...`);
-    runOptimization(updatedRules);
+    if (hasFilters) {
+      runOptimization(updatedRules);
+    } else {
+      addLog(`No custom filters entered — using existing NLP results.`);
+    }
   };
 
   const resetCustomRulesForIngredient = (ingName: string) => {
@@ -503,6 +530,18 @@ export default function App() {
     setTunePrompt("");
     addLog(`Resetting custom filters for "${ingName}" to default NLP heuristics.`);
     runOptimization(updatedRules);
+  };
+
+  const updateIngredientName = (index: number, newName: string) => {
+    const updated = [...ingredients];
+    updated[index].name = newName;
+    setIngredients(updated);
+    
+    const updatedBase = [...baseIngredients];
+    if (updatedBase[index]) {
+      updatedBase[index].name = newName;
+      setBaseIngredients(updatedBase);
+    }
   };
 
   // Modify ingredient list dynamically before run
@@ -527,15 +566,10 @@ export default function App() {
   };
 
   const addCustomIngredient = () => {
-    const name = prompt("Enter ingredient name:");
-    if (!name) return;
-    const qty = prompt("Enter required portion quantity (e.g., '500g', '1 can', '12pk'):", "500g");
-    if (!qty) return;
-    
-    setIngredients([...ingredients, { name, qty }]);
-    const baseQty = scaleQuantity(qty, servings, 4);
-    setBaseIngredients([...baseIngredients, { name, qty: baseQty }]);
-    addLog(`Added custom ingredient to list: "${name}" with portion "${qty}"`);
+    const newItem = { name: "", qty: "500g" };
+    setIngredients(prev => [...prev, newItem]);
+    setBaseIngredients(prev => [...prev, newItem]);
+    addLog(`Spawned new empty ingredient row.`);
   };
 
   // Agent Chat Onboarding Pipeline
@@ -860,7 +894,7 @@ export default function App() {
               </div>
 
               {/* Chat Log Window */}
-              <div className="flex-1 overflow-y-auto py-4 space-y-3 pr-1 custom-scrollbar text-xs">
+              <div ref={chatContainerRef} className="flex-1 overflow-y-auto py-4 space-y-3 pr-1 custom-scrollbar text-xs">
                 {agentHistory.map((msg, i) => (
                   <div key={i} className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}>
                     <div className={`p-3 rounded-xl max-w-[85%] leading-relaxed ${
@@ -1215,9 +1249,14 @@ export default function App() {
                 <div className="max-h-48 overflow-y-auto flex flex-col gap-2 pr-1 custom-scrollbar">
                   {ingredients.map((ing, idx) => (
                     <div key={idx} className="flex items-center justify-between bg-slate-50 border border-slate-200/60 rounded-lg px-2.5 py-1.5 text-xs">
-                      <span className="font-semibold text-slate-700 truncate max-w-[140px] capitalize">
-                        {ing.name}
-                      </span>
+                      <input 
+                        type="text"
+                        value={ing.name}
+                        onChange={(e) => updateIngredientName(idx, e.target.value)}
+                        placeholder="Ingredient name"
+                        className="font-semibold text-slate-700 truncate max-w-[140px] capitalize bg-transparent border-none focus:ring-0 px-0"
+                        title="Ingredient name"
+                      />
                       <div className="flex items-center gap-2">
                         <input 
                           type="text"
@@ -1282,7 +1321,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto font-mono text-[10px] leading-relaxed text-slate-300 space-y-1.5 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
+            <div ref={logContainerRef} className="flex-1 overflow-y-auto font-mono text-[10px] leading-relaxed text-slate-300 space-y-1.5 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
               {logs.map((log, i) => (
                 <div key={i} className="flex gap-2 items-start hover:bg-slate-800/20 p-0.5 rounded-sm transition-colors">
                   <span className="text-slate-500 select-none">[{log.time}]</span>
@@ -1457,14 +1496,56 @@ export default function App() {
                             <th className="py-2.5 px-3 text-emerald-800 bg-emerald-50 text-right">Optimal Match</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100 text-xs">
+                        <tbody key={renderTrigger} className="divide-y divide-slate-100 text-xs">
                           {ingredients.map((ing, iIdx) => {
-                            // Apply persistent manual overrides
-                            const productMatches = optResults.results.filter((r: any) => {
-                                const isMatched = r.ingredient === ing.name;
-                                if (!isMatched) return false;
+                            // Collect ALL products for this ingredient from allFoundProducts
+                            // (includes NLP-matched AND NLP-rejected so manual overrides can bring them back)
+                            let productMatches: any[] = [];
+                            if (optResults.allFoundProducts) {
+                              optResults.nearbyStores.forEach((store: any) => {
+                                const storeProducts = optResults.allFoundProducts[store.store_id]?.[ing.name] || [];
+                                storeProducts.forEach((p: any) => {
+                                  productMatches.push({
+                                    ...p,
+                                    ingredient: ing.name,
+                                    store: store.name,
+                                    store_id: store.store_id,
+                                  });
+                                });
+                              });
+                            } else {
+                              productMatches = optResults.results.filter((r: any) => r.ingredient === ing.name);
+                            }
+
+                            // Full filter chain: manual override > custom rules > NLP match
+                            productMatches = productMatches.filter((r: any) => {
+                                // 1. Manual override — highest priority
                                 const override = productOverrides[r.name];
                                 if (override === 'exclude') return false;
+                                if (override === 'include') return true;
+
+                                // 2. Custom keyword rules
+                                const rule = customRules[ing.name];
+                                if (rule) {
+                                    const pName = r.name.toLowerCase();
+                                    if (rule.exclude) {
+                                      const excludeKeywords = rule.exclude.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+                                      if (excludeKeywords.length > 0 && excludeKeywords.some(kw => pName.includes(kw))) {
+                                        return false;
+                                      }
+                                    }
+                                    if (rule.include) {
+                                      const includeKeywords = rule.include.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+                                      if (includeKeywords.length > 0 && !includeKeywords.some(kw => pName.includes(kw))) {
+                                        return false;
+                                      }
+                                    }
+                                }
+
+                                // 3. NLP match as default filter
+                                // Products NLP rejected are excluded UNLESS manually included above
+                                if (!r.is_matched) return false;
+
                                 return true;
                             });
                             
@@ -1764,7 +1845,7 @@ export default function App() {
                       <div className="relative border border-slate-200 rounded-xl bg-slate-950 overflow-hidden w-full h-[400px] flex items-center justify-center shadow-inner">
                         {optResults && optResults.nearbyStores.length > 0 && (
                           <MapContainer 
-                            center={[optResults.nearbyStores[0].latitude, optResults.nearbyStores[0].longitude]} 
+                            center={[optResults.userLat || optResults.nearbyStores[0].latitude, optResults.userLon || optResults.nearbyStores[0].longitude]} 
                             zoom={13} 
                             style={{ height: "400px", width: "100%" }}
                           >
@@ -1772,6 +1853,16 @@ export default function App() {
                               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                             />
+                            {/* User Green Marker */}
+                            <Marker icon={userIcon} position={[optResults.userLat || optResults.nearbyStores[0].latitude, optResults.userLon || optResults.nearbyStores[0].longitude]}>
+                              <Popup>
+                                <div className="p-1 font-sans">
+                                  <h4 className="font-bold text-xs text-slate-800">Your Location</h4>
+                                  <p className="text-[10px] text-slate-500 mt-0.5">{address}</p>
+                                </div>
+                              </Popup>
+                            </Marker>
+                            
                             {optResults.nearbyStores.map((store: any, idx: number) => (
                               <Marker key={idx} icon={simpleIcon} position={[store.latitude, store.longitude]}>
                                 <Popup>{store.name}</Popup>
@@ -1930,11 +2021,21 @@ export default function App() {
 
                             <div className="flex gap-2.5 pt-2">
                               <button
-                                onClick={() => applyCustomRulesForIngredient(tuningIngredient)}
+                                type="button"
+                                onClick={() => { 
+                                  console.log("Button clicked, tuningIngredient:", tuningIngredient);
+                                  applyCustomRulesForIngredient(tuningIngredient!);
+                                }}
                                 disabled={loading}
-                                className="flex-1 bg-slate-900 text-white font-bold py-2.5 px-4 rounded-lg hover:bg-slate-800 transition-all cursor-pointer disabled:opacity-50 text-xs text-center font-semibold"
+                                className={`z-50 flex-1 font-bold py-2.5 px-4 rounded-lg transition-all duration-300 cursor-pointer text-xs text-center font-semibold ${
+                                  loading
+                                    ? "bg-slate-700 text-slate-300"
+                                    : btnAnimation
+                                      ? "bg-emerald-500 text-white scale-[0.97] shadow-lg"
+                                      : "bg-slate-900 text-white hover:bg-slate-800"
+                                } disabled:opacity-60 disabled:cursor-not-allowed`}
                               >
-                                {loading ? "Re-optimizing..." : "Apply AI Rules"}
+                                {loading ? "Optimizing..." : btnAnimation ? "Applied!" : "Apply Rules"}
                               </button>
                               {customRules[tuningIngredient] && (
                                 <button

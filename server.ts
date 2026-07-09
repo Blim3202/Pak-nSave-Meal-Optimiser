@@ -452,6 +452,16 @@ app.get("/api/geocode", async (req, res) => {
     return res.status(400).json({ error: "Address parameter required" });
   }
 
+  // Parse direct GPS coordinate format: "GPS Position (lat, lng)"
+  const gpsMatch = address.match(/GPS\s*Position\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)/i);
+  if (gpsMatch) {
+    return res.json({
+      lat: parseFloat(gpsMatch[1]),
+      lon: parseFloat(gpsMatch[2]),
+      display_name: `GPS Position (${gpsMatch[1]}, ${gpsMatch[2]})`
+    });
+  }
+
   // Check known locations for instantaneous response
   const lowerAddr = address.toLowerCase();
   for (const [key, coords] of Object.entries(KNOWN_COORDS)) {
@@ -788,14 +798,16 @@ Respond ONLY with a JSON object where each key is the exact ingredient name from
 
       // Query only the top 20 ingredients (slicing to top 20 items per search)
       const top20Products = filteredProducts.slice(0, 20);
+      const requiredQty = quantities[ing] || "1 unit";
+
+      // Store ALL products (not just NLP-passed) with cost details so client-side
+      // manual overrides / custom rules can re-filter from the full set
       allFoundProducts[store.store_id][ing] = products.map(p => {
-        // Add matching status helper for the UI explorer
         const isMatched = filteredProducts.some(f => f.name === p.name);
-        return { ...p, is_matched: isMatched };
+        const details = calculatePortionDetails(requiredQty, p.units, p.price);
+        return { ...p, is_matched: isMatched, purchase_cost: details.purchaseCost, portion_cost: details.portionCost, packs_needed: details.packsNeeded };
       });
 
-      // Find best match in this store deterministically
-      const requiredQty = quantities[ing] || "1 unit";
       const matchedWithCosts = top20Products.map(p => {
         const details = calculatePortionDetails(requiredQty, p.units, p.price);
         return { ...p, ...details };
@@ -950,6 +962,8 @@ Respond ONLY with a JSON object where each key is the exact ingredient name from
   send({
     type: 'result',
     data: {
+      userLat,
+      userLon,
       nearbyStores,
       storesSummary,
       results,
