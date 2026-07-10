@@ -29,7 +29,8 @@ import {
   FileText,
   Send,
   User,
-  ArrowRight
+  ArrowRight,
+  X
 } from "lucide-react";
 import { STORES } from "./data/stores";
 import { DISHES, DISH_QUANTITIES } from "./data/dishes";
@@ -204,6 +205,7 @@ export default function App() {
 
   // App UI State
   const [loading, setLoading] = useState(false);
+  const [dishBuilderError, setDishBuilderError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogMessage[]>([]);
   const [activeTab, setActiveTab] = useState<"matrix" | "list" | "ai" | "map" | "tuner">("matrix");
   
@@ -215,8 +217,10 @@ export default function App() {
   const [customRules, setCustomRules] = useState<Record<string, { include: string; exclude: string; customPrompt: string }>>({});
   const [renderTrigger, setRenderTrigger] = useState(0);
   const [tuningIngredient, setTuningIngredient] = useState<string | null>(null);
-  const [tuneInclude, setTuneInclude] = useState("");
-  const [tuneExclude, setTuneExclude] = useState("");
+  const [tuneIncludeTags, setTuneIncludeTags] = useState<string[]>([]);
+  const [tuneExcludeTags, setTuneExcludeTags] = useState<string[]>([]);
+  const [includeInput, setIncludeInput] = useState("");
+  const [excludeInput, setExcludeInput] = useState("");
   const [tunePrompt, setTunePrompt] = useState("");
   const [btnAnimation, setBtnAnimation] = useState(false);
 
@@ -288,6 +292,7 @@ export default function App() {
     if (!dishName) return;
 
     setLoading(true);
+    setDishBuilderError(null);
     addLog(`Analyzing recipe composition for "${dishName}" (base servings: 4)...`);
     try {
       const res = await fetch("/api/dish-ingredients", {
@@ -303,13 +308,16 @@ export default function App() {
         }));
         setBaseIngredients(list);
         addLog(`Recipe parsed successfully. Found ${list.length} key ingredients.`);
-      } else if (res.status === 429) {
-        addLog("Error: Rate limit exceeded for AI ingredient generation. Please wait a few moments and try again.");
       } else {
-        addLog("Failed to breakdown dish. Please try again later.");
+        const errData = await res.json().catch(() => ({}));
+        const errMsg = errData.error || `Failed to analyze recipe for "${dishName}".`;
+        setDishBuilderError(errMsg);
+        addLog(`Error: ${errMsg}`);
       }
     } catch (err) {
-      addLog("Failed to breakdown dish. Using offline ingredients fallback.");
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setDishBuilderError(`Network error while breaking down "${dishName}": ${errMsg}`);
+      addLog(`Failed to breakdown dish: ${errMsg}`);
     } finally {
       setLoading(false);
     }
@@ -493,13 +501,74 @@ export default function App() {
   const selectTuningIngredient = (ingName: string) => {
     setTuningIngredient(ingName);
     const existing = customRules[ingName] || { include: "", exclude: "", customPrompt: "" };
-    setTuneInclude(existing.include);
-    setTuneExclude(existing.exclude);
+    
+    // Parse the comma-separated strings into tag arrays
+    const includes = existing.include ? existing.include.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const excludes = existing.exclude ? existing.exclude.split(',').map(s => s.trim()).filter(Boolean) : [];
+    
+    setTuneIncludeTags(includes);
+    setTuneExcludeTags(excludes);
+    setIncludeInput("");
+    setExcludeInput("");
     setTunePrompt(existing.customPrompt);
   };
 
+  const commitIncludeTag = () => {
+    const val = includeInput.trim();
+    if (val) {
+      const tags = val.split(/[,\n;]+/).map(t => t.trim()).filter(Boolean);
+      setTuneIncludeTags(prev => {
+        const next = [...prev];
+        tags.forEach(tag => {
+          if (!next.includes(tag)) {
+            next.push(tag);
+          }
+        });
+        return next;
+      });
+    }
+    setIncludeInput("");
+  };
+
+  const commitExcludeTag = () => {
+    const val = excludeInput.trim();
+    if (val) {
+      const tags = val.split(/[,\n;]+/).map(t => t.trim()).filter(Boolean);
+      setTuneExcludeTags(prev => {
+        const next = [...prev];
+        tags.forEach(tag => {
+          if (!next.includes(tag)) {
+            next.push(tag);
+          }
+        });
+        return next;
+      });
+    }
+    setExcludeInput("");
+  };
+
   const applyCustomRulesForIngredient = (ingName: string) => {
-    const hasFilters = tuneInclude.trim() || tuneExclude.trim() || tunePrompt.trim();
+    // If there is still text typed but not yet committed as a tag, treat it as a tag
+    let finalIncludes = [...tuneIncludeTags];
+    if (includeInput.trim()) {
+      const val = includeInput.trim();
+      if (!finalIncludes.includes(val)) {
+        finalIncludes.push(val);
+      }
+    }
+
+    let finalExcludes = [...tuneExcludeTags];
+    if (excludeInput.trim()) {
+      const val = excludeInput.trim();
+      if (!finalExcludes.includes(val)) {
+        finalExcludes.push(val);
+      }
+    }
+
+    const includeStr = finalIncludes.join(',');
+    const excludeStr = finalExcludes.join(',');
+
+    const hasFilters = includeStr.trim() || excludeStr.trim() || tunePrompt.trim();
     addLog(`Applying custom AI filters for "${ingName}"...`);
     setBtnAnimation(true);
     setTimeout(() => setBtnAnimation(false), 2000);
@@ -508,12 +577,19 @@ export default function App() {
     const updatedRules = {
       ...customRules,
       [ingName]: {
-        include: tuneInclude,
-        exclude: tuneExclude,
+        include: includeStr,
+        exclude: excludeStr,
         customPrompt: tunePrompt
       }
     };
     setCustomRules(updatedRules);
+
+    // Update local states to commit the tags
+    setTuneIncludeTags(finalIncludes);
+    setTuneExcludeTags(finalExcludes);
+    setIncludeInput("");
+    setExcludeInput("");
+
     if (hasFilters) {
       runOptimization(updatedRules);
     } else {
@@ -525,8 +601,10 @@ export default function App() {
     const updatedRules = { ...customRules };
     delete updatedRules[ingName];
     setCustomRules(updatedRules);
-    setTuneInclude("");
-    setTuneExclude("");
+    setTuneIncludeTags([]);
+    setTuneExcludeTags([]);
+    setIncludeInput("");
+    setExcludeInput("");
     setTunePrompt("");
     addLog(`Resetting custom filters for "${ingName}" to default NLP heuristics.`);
     runOptimization(updatedRules);
@@ -814,6 +892,36 @@ export default function App() {
 
   return (
     <div id="app-root" className="min-h-screen bg-slate-50 font-sans text-slate-800 flex flex-col antialiased">
+      {/* GLOBAL DISH BUILDER ERROR POPUP */}
+      {dishBuilderError && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4">
+          <div className="bg-white rounded-xl border border-slate-200 max-w-md w-full p-6 shadow-xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-4">
+              <div className="bg-rose-50 text-rose-600 p-3 rounded-full shrink-0">
+                <AlertCircle className="w-6 h-6" />
+              </div>
+              <div className="flex-1 space-y-2">
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">Dish Builder Analysis Failed</h3>
+                <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                  {dishBuilderError}
+                </p>
+                <div className="bg-slate-50 border border-slate-100 p-2.5 rounded-lg text-[10px] text-slate-500 font-mono mt-2">
+                  Tip: Make sure your entry matches a realistic, cooking-friendly recipe or check that your Gemini API key is properly configured.
+                </div>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => setDishBuilderError(null)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
+              >
+                Dismiss Error
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* HEADER SECTION */}
       <header id="app-header" className="bg-white border-b border-slate-200 sticky top-0 z-50 py-3.5 px-6 shadow-xs flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -1553,7 +1661,7 @@ export default function App() {
                             
                             let cheapestOverall: any = null;
                             if (productMatches.length > 0) {
-                              cheapestOverall = [...productMatches].sort((a, b) => a.purchase_cost - b.purchase_cost)[0];
+                              cheapestOverall = [...productMatches].sort((a, b) => a.portion_cost - b.portion_cost)[0];
                             }
 
                             return (
@@ -1594,8 +1702,11 @@ export default function App() {
                                         {cheapestOverall.store.replace("Pak'nSave ", "").toUpperCase()}
                                       </span>
                                       <p className="text-slate-800 font-bold text-[11px] truncate">{cheapestOverall.name}</p>
-                                      <p className="text-[10px] font-mono text-emerald-800 font-bold mt-0.5">
-                                        Pack: ${cheapestOverall.price} <span className="text-slate-400 font-normal">({cheapestOverall.units})</span>
+                                      <p className="text-[10px] font-mono text-slate-500 mt-0.5">
+                                        Pack: ${cheapestOverall.price} <span className="text-slate-400">({cheapestOverall.units})</span>
+                                      </p>
+                                      <p className="text-[10px] font-mono text-emerald-800 font-bold">
+                                        Used: ${cheapestOverall.portion_cost?.toFixed(2) || cheapestOverall.portion_cost}
                                       </p>
                                     </div>
                                   ) : (
@@ -1979,30 +2090,82 @@ export default function App() {
                               <label className="block text-slate-600 font-bold mb-1.5" htmlFor="must-include-field">
                                 Must Include (Inclusions)
                               </label>
+                              
+                              {tuneIncludeTags.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 mb-2 p-1.5 bg-slate-50 border border-slate-100 rounded-lg">
+                                  {tuneIncludeTags.map((tag, idx) => (
+                                    <span key={idx} className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-150 rounded-full px-2 py-0.5 text-[11px] font-medium transition-all hover:bg-emerald-100">
+                                      <span>{tag}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setTuneIncludeTags(prev => prev.filter((_, i) => i !== idx))}
+                                        className="hover:bg-emerald-200/60 rounded-full p-0.5 text-emerald-600 focus:outline-hidden cursor-pointer"
+                                        title={`Remove "${tag}"`}
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+
                               <input
                                 id="must-include-field"
                                 type="text"
-                                value={tuneInclude}
-                                onChange={(e) => setTuneInclude(e.target.value)}
-                                placeholder="e.g. Pam's, organic, premium, whole"
+                                value={includeInput}
+                                onChange={(e) => setIncludeInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    commitIncludeTag();
+                                  }
+                                }}
+                                onBlur={commitIncludeTag}
+                                placeholder="Type a keyword/brand and press Enter..."
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-hidden focus:border-slate-900 focus:ring-1 focus:ring-slate-900"
                               />
-                              <span className="text-[9px] text-slate-400 mt-1 block">Comma-separated keywords or brands to isolate.</span>
+                              <span className="text-[9px] text-slate-400 mt-1 block">Press Enter or leave the field to save as a filter tag.</span>
                             </div>
 
                             <div>
                               <label className="block text-slate-600 font-bold mb-1.5" htmlFor="must-exclude-field">
                                 Must Exclude (Exclusions)
                               </label>
+
+                              {tuneExcludeTags.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 mb-2 p-1.5 bg-slate-50 border border-slate-100 rounded-lg">
+                                  {tuneExcludeTags.map((tag, idx) => (
+                                    <span key={idx} className="inline-flex items-center gap-1 bg-rose-50 text-rose-800 border border-rose-150 rounded-full px-2 py-0.5 text-[11px] font-medium transition-all hover:bg-rose-100">
+                                      <span>{tag}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setTuneExcludeTags(prev => prev.filter((_, i) => i !== idx))}
+                                        className="hover:bg-rose-200/60 rounded-full p-0.5 text-rose-600 focus:outline-hidden cursor-pointer"
+                                        title={`Remove "${tag}"`}
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+
                               <input
                                 id="must-exclude-field"
                                 type="text"
-                                value={tuneExclude}
-                                onChange={(e) => setTuneExclude(e.target.value)}
-                                placeholder="e.g. wrap, tortilla, chips, crackers, sachet"
+                                value={excludeInput}
+                                onChange={(e) => setExcludeInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    commitExcludeTag();
+                                  }
+                                }}
+                                onBlur={commitExcludeTag}
+                                placeholder="Type a term to filter out and press Enter..."
                                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 focus:outline-hidden focus:border-slate-900 focus:ring-1 focus:ring-slate-900"
                               />
-                              <span className="text-[9px] text-slate-400 mt-1 block">Comma-separated terms to completely exclude (filters out faulty searches).</span>
+                              <span className="text-[9px] text-slate-400 mt-1 block">Press Enter or leave the field to save as a filter tag.</span>
                             </div>
 
                             <div>

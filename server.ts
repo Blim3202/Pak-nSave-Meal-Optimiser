@@ -522,11 +522,7 @@ app.post("/api/dish-ingredients", async (req, res) => {
       });
       return res.json({ ingredients: ings, quantities: qtys, log: "Gemini client not initialized. Loaded local database preset." });
     }
-    return res.json({
-      ingredients: [normalized, "vegetables", "cooking oil"],
-      quantities: { [normalized]: "500g", "vegetables": "1 pack", "cooking oil": "50ml" },
-      log: "Gemini client not initialized. Loaded simple mock breakdown."
-    });
+    return res.status(400).json({ error: `AI Assistant is not initialized, and "${dish}" is not a recognized preset recipe. Please enter a recognized recipe preset or configure your Gemini API key in the workspace settings.` });
   }
 
   try {
@@ -588,7 +584,7 @@ Respond ONLY with a JSON object containing "ingredients" (array of strings) and 
   } catch (err: any) {
     console.error("Gemini breakdown failed:", err);
     if (err.status === 429 || err.message?.includes("429")) {
-      return res.status(429).json({ error: "Rate limit exceeded. Please try again in a minute." });
+      return res.status(429).json({ error: "AI rate limit exceeded. Please wait a minute and try again." });
     }
     // Offline database fallback
     if (DISHES[normalized]) {
@@ -599,11 +595,7 @@ Respond ONLY with a JSON object containing "ingredients" (array of strings) and 
       });
       return res.json({ ingredients: ings, quantities: qtys, log: "Gemini call failed. Loaded local database preset instead." });
     }
-    return res.json({
-      ingredients: [normalized, "vegetables", "cooking oil"],
-      quantities: { [normalized]: "500g", "vegetables": "1 pack", "cooking oil": "50ml" },
-      log: "Failed to query Gemini. Loaded simple mock breakdown instead."
-    });
+    return res.status(500).json({ error: `Failed to analyze dish "${dish}". The AI service is currently unavailable and "${dish}" is not a recognized preset recipe.` });
   }
 });
 
@@ -770,10 +762,9 @@ Respond ONLY with a JSON object where each key is the exact ingredient name from
             is_mock: false
           }));
         } else {
-          // Fallback to high-fidelity mock generator
-          const hash = store.name.charCodeAt(0) + store.name.charCodeAt(store.name.length - 1);
-          products = generateRealisticNZProducts(ing, hash).map(p => ({ ...p, is_mock: true }));
-          isMock = true;
+          // Do not fall back to mock products or pricing to prevent giving false info to the customer
+          products = [];
+          isMock = false;
         }
         
         // Cache the raw supermarket catalog search results (keeping the top 20 search index matches)
