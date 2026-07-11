@@ -536,8 +536,10 @@ This dish can be a traditional recipe, a specific variation, a diet-friendly alt
 Please follow these strict guidelines:
 1. Only return raw, individual cooking ingredients (e.g. "beef mince", "onion", "cheddar cheese", "canned chopped tomatoes") rather than prepared food kits, pre-cooked meals, or finished multi-ingredient meal-boxes.
 2. Limit the list to between 4 and 8 core, essential raw ingredients. Avoid micro-ingredients (like "salt", "pepper", "water") unless critical.
-3. Scale the quantities realistically for ${servings} servings. Use standard New Zealand retail unit pack sizes (e.g., "500g", "1kg", "1 can (400g)", "12pk", "1L").
+3. Scale the raw and uncooked ingredient quantities realistically and appropriately for ${servings} servings. Use standard New Zealand retail unit pack sizes (e.g., "500g", "1kg", "1 can (400g)", "12pk", "1L").
 4. Under NO circumstances should any quantity be "1 unit" or generic "unit". Use a specific, standard retail package size, weight, volume, or a clear piece/count description (e.g. "4 pieces", "1 bag (1.5kg)", "1 bunch").
+5. Ensure that the amount of ingredient is correct for ${servings} servings.
+6. Ensure that the ingredients are appropriately broken down into things you can find in a supermarket .
 
 Respond ONLY with a JSON object containing "ingredients" (array of strings) and "quantities" (object mapping ingredient to quantity string). Do not include any introductory or concluding text.`;
 

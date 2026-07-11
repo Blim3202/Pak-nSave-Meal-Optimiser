@@ -704,7 +704,7 @@ export default function App() {
     } 
     else if (agentStep === "distance") {
       const num = parseInt(text.replace(/[^0-9]/g, ""));
-      const validRadius = isNaN(num) ? 5 : Math.max(2, Math.min(15, num));
+      const validRadius = isNaN(num) ? 5 : Math.max(2, Math.min(8, num));
       setRadius(validRadius);
       addLog(`Agent Onboarding Travel radius set to: ${validRadius}km`);
 
@@ -1101,7 +1101,7 @@ export default function App() {
                 {agentStep === "distance" && (
                   <div className="flex flex-col gap-3">
                     <div className="flex gap-2 justify-between">
-                      {["3", "5", "10", "15"].map((km) => (
+                      {["2", "4", "6", "8"].map((km) => (
                         <button
                           key={km}
                           onClick={() => handleAgentInputSubmit(`${km}km`)}
@@ -1115,7 +1115,7 @@ export default function App() {
                       <input
                         type="range"
                         min="2"
-                        max="15"
+                        max="8"
                         step="1"
                         value={radius}
                         onChange={(e) => setRadius(parseInt(e.target.value))}
@@ -1305,7 +1305,7 @@ export default function App() {
                     id="input-radius"
                     type="range"
                     min="2"
-                    max="15"
+                    max="8"
                     step="1"
                     value={radius}
                     onChange={(e) => setRadius(parseInt(e.target.value))}
