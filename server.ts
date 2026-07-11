@@ -525,6 +525,7 @@ app.post("/api/dish-ingredients", async (req, res) => {
     return res.status(400).json({ error: `AI Assistant is not initialized, and "${dish}" is not a recognized preset recipe. Please enter a recognized recipe preset or configure your Gemini API key in the workspace settings.` });
   }
 
+  let response: any = null;
   try {
     console.log(`[Gemini] Breaking down dish: "${dish}"`);
     const prompt = `You are the Dish Ingredient Generator Agent for NZ MealCost Optimizer.
@@ -540,27 +541,36 @@ Please follow these strict guidelines:
 
 Respond ONLY with a JSON object containing "ingredients" (array of strings) and "quantities" (object mapping ingredient to quantity string). Do not include any introductory or concluding text.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite",
+    response = await ai.models.generateContent({
+      model: "gemini-3.1-flash-lite", // Supports structured outputs
       contents: prompt,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
-          required: ["ingredients", "quantities"],
+          required: ["ingredients"],
           properties: {
             ingredients: {
               type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "A list of 4-8 raw ingredients",
-            },
-            quantities: {
-              type: Type.OBJECT,
-              description: "A map of ingredient name to its retail portion size",
-            },
-          },
-        },
-      },
+              description: "A list of 4-8 ingredients with their respective retail portions",
+              items: {
+                type: Type.OBJECT,
+                required: ["name", "quantity"],
+                properties: {
+                  name: { 
+                    type: Type.STRING, 
+                    description: "The name of the raw ingredient" 
+                  },
+                  quantity: { 
+                    type: Type.STRING, 
+                    description: "The retail portion size" 
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     });
 
     console.log(`[Gemini] Response received for "${dish}"`);
@@ -572,30 +582,75 @@ Respond ONLY with a JSON object containing "ingredients" (array of strings) and 
         rawText = jsonMatch[0];
       }
       try {
-        const data = JSON.parse(rawText);
-        dishBreakdownCache[cacheKey] = data;
-        return res.json({ ...data, log: "Gemini successful." });
+        const parsed = JSON.parse(rawText);
+        
+        // Convert schema format: { ingredients: Array<{ name, quantity }> }
+        // into expected format: { ingredients: string[], quantities: Record<string, string> }
+        let ingredientsList: string[] = [];
+        let quantitiesMap: Record<string, string> = {};
+
+        if (parsed && Array.isArray(parsed.ingredients)) {
+          parsed.ingredients.forEach((item: any) => {
+            if (item && typeof item === "object" && item.name) {
+              const name = item.name.trim();
+              ingredientsList.push(name);
+              quantitiesMap[name] = item.quantity || "1 unit";
+            } else if (typeof item === "string") {
+              ingredientsList.push(item);
+              if (parsed.quantities && parsed.quantities[item]) {
+                quantitiesMap[item] = parsed.quantities[item];
+              } else {
+                quantitiesMap[item] = "1 unit";
+              }
+            }
+          });
+        }
+
+        if (ingredientsList.length === 0) {
+          throw new Error("No ingredients parsed from Gemini response.");
+        }
+
+        const finalData = {
+          ingredients: ingredientsList,
+          quantities: quantitiesMap
+        };
+
+        dishBreakdownCache[cacheKey] = finalData;
+        return res.json({ ...finalData, log: "Gemini successful." });
       } catch (parseErr) {
         console.error("Failed to parse JSON response:", rawText, parseErr);
-        throw new Error("Invalid JSON from Gemini");
+        throw new Error(`Invalid JSON from Gemini. Raw response:\n${rawText}`);
       }
     }
-    throw new Error("Empty response from Gemini");
+    const emptyMsg = response?.text ? `Gemini returned text but response.text was falsy` : "Empty response from Gemini";
+    throw new Error(emptyMsg);
   } catch (err: any) {
     console.error("Gemini breakdown failed:", err);
-    if (err.status === 429 || err.message?.includes("429")) {
+    
+    // Check for authorization/blocked key errors and provide extremely clear, helpful error advice
+    const errMsg = err.message || String(err);
+    const isAuthError = errMsg.includes("UNAUTHENTICATED") || 
+                        errMsg.includes("401") || 
+                        errMsg.includes("API_KEY_SERVICE_BLOCKED") || 
+                        errMsg.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED");
+
+    if (isAuthError) {
+      return res.status(401).json({
+        error: `Gemini API key is unauthenticated or blocked. Your current key starts with 'AQ.', which Google's servers have restricted (ACCESS_TOKEN_TYPE_UNSUPPORTED or API_KEY_SERVICE_BLOCKED). To resolve this, go to Google AI Studio, generate a standard API key starting with 'AIzaSy...', and save it under the name 'GEMINI_API_KEY' in Settings > Secrets to override the blocked default.`
+      });
+    }
+
+    if (err.status === 429 || errMsg.includes("429")) {
       return res.status(429).json({ error: "AI rate limit exceeded. Please wait a minute and try again." });
     }
-    // Offline database fallback
-    if (DISHES[normalized]) {
-      const ings = DISHES[normalized];
-      const qtys: Record<string, string> = {};
-      ings.forEach(ing => {
-        qtys[ing] = DISH_QUANTITIES[normalized]?.[ing] || "1 unit";
-      });
-      return res.json({ ingredients: ings, quantities: qtys, log: "Gemini call failed. Loaded local database preset instead." });
+
+    // No fallback presets on AI failure (as requested to prevent silent false dishes)
+    // If we got raw text from Gemini (even if unparseable), surface it in the error
+    const rawResp = response?.text?.trim();
+    if (rawResp) {
+      return res.status(500).json({ error: `Gemini returned unparseable response:\n${rawResp.substring(0, 1000)}` });
     }
-    return res.status(500).json({ error: `Failed to analyze dish "${dish}". The AI service is currently unavailable and "${dish}" is not a recognized preset recipe.` });
+    return res.status(500).json({ error: `Gemini error: ${errMsg}` });
   }
 });
 
