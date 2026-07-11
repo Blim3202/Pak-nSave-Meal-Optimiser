@@ -539,7 +539,7 @@ Please follow these strict guidelines:
 3. Scale the raw and uncooked ingredient quantities realistically and appropriately for ${servings} servings. Use standard New Zealand retail unit pack sizes (e.g., "500g", "1kg", "1 can (400g)", "12pk", "1L").
 4. Under NO circumstances should any quantity be "1 unit" or generic "unit". Use a specific, standard retail package size, weight, volume, or a clear piece/count description (e.g. "4 pieces", "1 bag (1.5kg)", "1 bunch").
 5. Ensure that the amount of ingredient is correct for ${servings} servings.
-6. Ensure that the ingredients are appropriately broken down into things you can find in a supermarket .
+6. Ensure that the ingredients are appropriately broken down into things you can find in a supermarket and are suitable for human consumption.
 
 Respond ONLY with a JSON object containing "ingredients" (array of strings) and "quantities" (object mapping ingredient to quantity string). Do not include any introductory or concluding text.`;
 
@@ -661,6 +661,199 @@ const productSearchCache: Record<string, any[]> = {};
 const nlpProfileCache: Record<string, any> = {};
 const aiReportCache: Record<string, string> = {};
 const dishBreakdownCache: Record<string, any> = {};
+const recipeCache: Record<string, any> = {};
+
+// Dynamic Recipe Generator Guide
+app.post("/api/generate-recipe", async (req, res) => {
+  const { dish, servings = 4, ingredients = [] } = req.body;
+  if (!dish) {
+    return res.status(400).json({ error: "Dish name is required" });
+  }
+
+  const cacheKey = `${dish.toLowerCase().trim()}-${servings}-${JSON.stringify(ingredients)}`;
+  if (recipeCache[cacheKey]) {
+    return res.json(recipeCache[cacheKey]);
+  }
+
+  // Fallback in case Gemini is not available
+  if (!ai) {
+    const fallbackRecipe = {
+      dishName: dish,
+      servings,
+      warning: "AI Assistant is not initialized. This is a local fallback recipe guide. Always ensure meat is fully cooked and exercise standard kitchen safety.",
+      measurementDisclaimer: "Measurements are approximate. Adjust seasoning and portions to suit your personal preferences.",
+      generatedIngredientsUsed: ingredients,
+      additionalIngredientsNeeded: [
+        { name: "Salt & Pepper", qty: "to taste" },
+        { name: "Cooking Oil or Butter", qty: "1-2 tbsp" },
+        { name: "Water", qty: "as needed" }
+      ],
+      cookingSteps: [
+        {
+          stepNumber: 1,
+          title: "Preparation",
+          instruction: "Wash any fresh produce, measure your ingredients, and prepare your workspace.",
+          durationMinutes: 10
+        },
+        {
+          stepNumber: 2,
+          title: "Cooking the Base",
+          instruction: "Heat oil or butter in a pan, sauté aromatics (like onions or garlic if present) until softened.",
+          durationMinutes: 5
+        },
+        {
+          stepNumber: 3,
+          title: "Combine Ingredients",
+          instruction: `Add the main ingredients (${ingredients.map((i: any) => i.name).join(", ") || "the generated ingredients"}). Cook until tender, heated through, or cooked to safe internal temperatures.`,
+          durationMinutes: 15
+        },
+        {
+          stepNumber: 4,
+          title: "Season and Serve",
+          instruction: "Adjust seasoning with salt, pepper, or other household spices. Serve hot and enjoy!",
+          durationMinutes: 5
+        }
+      ],
+      totalTimeMinutes: 35,
+      prepTimeMinutes: 10
+    };
+    return res.json(fallbackRecipe);
+  }
+
+  try {
+    const prompt = `You are an expert culinary assistant and recipe developer.
+We need a dynamic, high-quality recipe guide for the dish: "${dish}" scaled for ${servings} servings.
+The user has generated the following core ingredients in our app:
+${JSON.stringify(ingredients, null, 2)}
+
+Please follow these instructions strictly to construct the recipe:
+1. Ensure ALL of the above generated ingredients are incorporated into the cooking steps.
+2. In addition to the generated ingredients, identify other basic household items or pantry staples required (such as water, salt, pepper, oil, butter, common spices, and basic seasonings) and list them under additional ingredients.
+3. Include an explicit safety and accuracy warning about AI-generated recipes. Explain that AI recipes might not be accurate or necessarily safe, and that meat/poultry must be cooked to recommended internal temperatures.
+4. Include a disclaimer about measurements: emphasize that recipes don't have to use exact measurements and can use a range of weights/sizes according to the user's personal taste, preferences, and actual package sizes purchased.
+5. Detail clear, step-by-step instructions for cooking, including estimated timing/durations for each step.
+
+Respond ONLY with a JSON object matching this schema:
+{
+  "dishName": "Name of the dish",
+  "servings": ${servings},
+  "warning": "Explicit warning about AI recipe accuracy and food safety",
+  "measurementDisclaimer": "Clear instruction that measurements are ranges and flexible",
+  "generatedIngredientsUsed": [ { "name": "ingredient name", "qty": "approximate quantity or range" } ],
+  "additionalIngredientsNeeded": [ { "name": "additional item", "qty": "approximate quantity or range" } ],
+  "cookingSteps": [
+    {
+      "stepNumber": 1,
+      "title": "Step title",
+      "instruction": "Detailed clear instructions on cooking steps",
+      "durationMinutes": 10
+    }
+  ],
+  "totalTimeMinutes": 35,
+  "prepTimeMinutes": 10
+}`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.1-flash-lite",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          required: ["dishName", "servings", "warning", "measurementDisclaimer", "generatedIngredientsUsed", "additionalIngredientsNeeded", "cookingSteps", "totalTimeMinutes", "prepTimeMinutes"],
+          properties: {
+            dishName: { type: Type.STRING },
+            servings: { type: Type.INTEGER },
+            warning: { type: Type.STRING },
+            measurementDisclaimer: { type: Type.STRING },
+            generatedIngredientsUsed: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                required: ["name", "qty"],
+                properties: {
+                  name: { type: Type.STRING },
+                  qty: { type: Type.STRING }
+                }
+              }
+            },
+            additionalIngredientsNeeded: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                required: ["name", "qty"],
+                properties: {
+                  name: { type: Type.STRING },
+                  qty: { type: Type.STRING }
+                }
+              }
+            },
+            cookingSteps: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                required: ["stepNumber", "title", "instruction", "durationMinutes"],
+                properties: {
+                  stepNumber: { type: Type.INTEGER },
+                  title: { type: Type.STRING },
+                  instruction: { type: Type.STRING },
+                  durationMinutes: { type: Type.INTEGER }
+                }
+              }
+            },
+            totalTimeMinutes: { type: Type.INTEGER },
+            prepTimeMinutes: { type: Type.INTEGER }
+          }
+        }
+      }
+    });
+
+    if (response.text) {
+      const parsed = JSON.parse(response.text.trim());
+      recipeCache[cacheKey] = parsed;
+      return res.json(parsed);
+    }
+    throw new Error("No text response from Gemini");
+  } catch (err: any) {
+    console.error("Failed to generate recipe:", err);
+    // Return standard fallback on failure
+    const fallbackRecipe = {
+      dishName: dish,
+      servings,
+      warning: "AI Assistant is currently offline or busy. Always ensure proper food safety protocols and check cooking temperatures thoroughly.",
+      measurementDisclaimer: "Adjust ingredient ratios to match your package sizes and taste preferences.",
+      generatedIngredientsUsed: ingredients,
+      additionalIngredientsNeeded: [
+        { name: "Salt & Pepper", qty: "to taste" },
+        { name: "Cooking Oil or Butter", qty: "1-2 tbsp" },
+        { name: "Water", qty: "as needed" }
+      ],
+      cookingSteps: [
+        {
+          stepNumber: 1,
+          title: "Prep Work",
+          instruction: "Wash, chop, and organize all ingredients.",
+          durationMinutes: 10
+        },
+        {
+          stepNumber: 2,
+          title: "Sauté and Sear",
+          instruction: "Heat your pan and cook the main proteins or aromatics.",
+          durationMinutes: 10
+        },
+        {
+          stepNumber: 3,
+          title: "Simmer or Bake",
+          instruction: "Cook everything together until fully done and safe to eat.",
+          durationMinutes: 15
+        }
+      ],
+      totalTimeMinutes: 35,
+      prepTimeMinutes: 10
+    };
+    return res.json(fallbackRecipe);
+  }
+});
 
 // Full optimization route
 app.post("/api/optimize", async (req, res) => {
@@ -737,15 +930,16 @@ For each of the following ingredients (along with their metadata of expected qua
 For example:
 - Searching for "onion" may return "onion tortilla wraps", "French onion dip", "onion soup sachets", "onion rings", "potato chips onion flavour", or "spring onion crackers".
 - Searching for "beef mince" may return "beef burger patties", "beef mince pies", "beef sausages", "beef stock cubes", or "beef dog/cat food".
+- Searching "lemons" may return "lemon flavoured lozenges".
 
 You MUST strictly incorporate any user-specified custom rules. If they specify to exclude a brand (e.g. "Pam's") or product form (e.g. "soup sachet"), add those words (e.g., "pams", "soup", "sachet") to the negative_keywords. If they specify to include a keyword or brand (e.g. "organic"), add it to the positive_keywords.
 
-We want to isolate only the exact, core cooking ingredient intended for the dish "${dish}" given its portion/quantity.
+We want to isolate only the exact, core cooking ingredient intended for the dish "${dish}" given its portion/quantity suitable for human consumption.
 
 For each ingredient, define:
 1. "expected_category": A broad category like "Fresh Produce", "Fresh Meat", "Pantry", "Bakery", "Dairy", "Canned Goods".
 2. "positive_keywords": 2-4 words that MUST be present in the product name/brand or are highly specific to the ingredient (e.g. for "onion", ["onion", "onions"]).
-3. "negative_keywords": Words representing completely different or processed product forms, wraps, tortillas, soup mixes, chips, crackers, seasoning packets, or pet foods to exclude (e.g., for "onion", avoid ["wrap", "wraps", "tortilla", "tortillas", "flatbread", "flatbreads", "chip", "chips", "crisp", "crisps", "soup", "sachet", "sachets", "mix", "mixes", "dip", "dips", "sauce", "sauces", "ring", "rings", "seasoning", "cracker", "crackers", "shampoo", "soap", "pet", "dog", "cat"]).
+3. "negative_keywords": Words representing completely different or processed product forms, wraps, tortillas, soup mixes, chips, crackers, seasoning packets, medicine, fragrances, cleaning products, or pet foods to exclude (e.g., for "onion", avoid ["wrap", "wraps", "tortilla", "tortillas", "flatbread", "flatbreads", "chip", "chips", "crisp", "crisps", "soup", "sachet", "sachets", "mix", "mixes", "dip", "dips", "sauce", "sauces", "ring", "rings", "seasoning", "cracker", "crackers", "shampoo", "soap", "pet", "dog", "cat", "medicine", "detergent", "scent", "flavoured"]).
 4. "allowed_synonyms": Acceptable alternative names or synonyms (e.g., ["brown onion", "red onion", "white onion", "loose onion"]).
 
 Ingredients with metadata to analyze:
@@ -890,29 +1084,59 @@ Respond ONLY with a JSON object where each key is the exact ingredient name from
   logs.push(`${timestamp()} Parsing portion sizes and unit metrics for optimal savings...`);
 
   // Build the comparison table & calculate metrics
-  // Cheapest Single Store totals
-  const storeTotals: Record<string, { totalPurchase: number; totalPortion: number; itemsCount: number; distance_km: number }> = {};
+  // Cheapest Single Store totals - only include stores that have ALL ingredients with valid prices
+  const storeTotals: Record<string, { totalPurchase: number; totalPortion: number; itemsCount: number; distance_km: number; allIngredientsFound: boolean }> = {};
   nearbyStores.forEach(s => {
-    storeTotals[s.name] = { totalPurchase: 0, totalPortion: 0, itemsCount: 0, distance_km: s.distance_km };
+    storeTotals[s.name] = { totalPurchase: 0, totalPortion: 0, itemsCount: 0, distance_km: s.distance_km, allIngredientsFound: true };
+  });
+
+  // Track which ingredients were found at each store with valid prices
+  const ingredientsFoundAtStore: Record<string, Set<string>> = {};
+  nearbyStores.forEach(s => {
+    ingredientsFoundAtStore[s.name] = new Set<string>();
   });
 
   results.forEach(r => {
-    if (storeTotals[r.store]) {
+    if (storeTotals[r.store] && r.purchase_cost > 0) {
       storeTotals[r.store].totalPurchase += r.purchase_cost;
       storeTotals[r.store].totalPortion += r.portion_cost;
       storeTotals[r.store].itemsCount += 1;
+      ingredientsFoundAtStore[r.store].add(r.ingredient);
     }
   });
 
-  const storesSummary = Object.entries(storeTotals).map(([name, val]) => ({
+  // Mark stores that don't have ALL ingredients with valid prices
+  const totalIngredients = ingredients.length;
+  Object.keys(storeTotals).forEach(storeName => {
+    if (ingredientsFoundAtStore[storeName].size < totalIngredients) {
+      storeTotals[storeName].allIngredientsFound = false;
+    }
+  });
+
+  // Only consider stores that have ALL ingredients for "Cheapest Single Store"
+  const eligibleStores = Object.entries(storeTotals)
+    .filter(([_, val]) => val.allIngredientsFound)
+    .map(([name, val]) => ({
+      store: name,
+      total_purchase: parseFloat(val.totalPurchase.toFixed(2)),
+      total_portion: parseFloat(val.totalPortion.toFixed(2)),
+      items_found: val.itemsCount,
+      distance_km: parseFloat(val.distance_km.toFixed(2)),
+      all_ingredients_found: true
+    }))
+    .sort((a, b) => a.total_purchase - b.total_purchase);
+
+  // Fallback: if no store has all ingredients, use all stores but mark them as incomplete
+  const storesSummary = eligibleStores.length > 0 ? eligibleStores : Object.entries(storeTotals).map(([name, val]) => ({
     store: name,
     total_purchase: parseFloat(val.totalPurchase.toFixed(2)),
     total_portion: parseFloat(val.totalPortion.toFixed(2)),
     items_found: val.itemsCount,
-    distance_km: parseFloat(val.distance_km.toFixed(2))
+    distance_km: parseFloat(val.distance_km.toFixed(2)),
+    all_ingredients_found: val.allIngredientsFound
   })).sort((a, b) => a.total_purchase - b.total_purchase);
 
-  const cheapestSingleStore = storesSummary[0] || { store: "N/A", total_purchase: 0, total_portion: 0, distance_km: 0 };
+  const cheapestSingleStore = storesSummary[0] || { store: "N/A", total_purchase: 0, total_portion: 0, distance_km: 0, items_found: 0, all_ingredients_found: false };
 
   // Best case (mix stores) total
   let optimizedTotalPurchase = 0;

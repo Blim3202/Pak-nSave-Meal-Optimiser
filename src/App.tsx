@@ -30,7 +30,8 @@ import {
   Send,
   User,
   ArrowRight,
-  X
+  X,
+  AlertTriangle
 } from "lucide-react";
 import { STORES } from "./data/stores";
 import { DISHES, DISH_QUANTITIES } from "./data/dishes";
@@ -152,6 +153,35 @@ const userIcon = divIcon({
   iconAnchor: [18, 18],
 });
 
+const getBrandBadgeStyle = (brand: string) => {
+  const b = brand.toLowerCase().trim();
+  if (b === 'pams') {
+    return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+  }
+  if (b === 'value') {
+    return 'bg-red-100 text-red-800 border-red-200';
+  }
+  if (b === 'anchor') {
+    return 'bg-blue-100 text-blue-800 border-blue-200';
+  }
+  if (b === 'meadow fresh') {
+    return 'bg-emerald-100 text-emerald-800 border-emerald-200';
+  }
+  const colors = [
+    'bg-slate-100 text-slate-800 border-slate-200',
+    'bg-amber-100 text-amber-800 border-amber-200',
+    'bg-teal-100 text-teal-800 border-teal-200',
+    'bg-indigo-100 text-indigo-800 border-indigo-200',
+    'bg-purple-100 text-purple-800 border-purple-200',
+    'bg-pink-100 text-pink-800 border-pink-200',
+  ];
+  let hash = 0;
+  for (let idx = 0; idx < brand.length; idx++) {
+    hash += brand.charCodeAt(idx);
+  }
+  return colors[hash % colors.length];
+};
+
 export default function App() {
   // Inputs state
   const [address, setAddress] = useState("Botany Town Centre, Auckland");
@@ -207,7 +237,10 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [dishBuilderError, setDishBuilderError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogMessage[]>([]);
-  const [activeTab, setActiveTab] = useState<"matrix" | "list" | "ai" | "map" | "tuner">("matrix");
+  const [activeTab, setActiveTab] = useState<"matrix" | "tuner" | "recipe" | "ai" | "map" | "list">("matrix");
+  const [recipe, setRecipe] = useState<any | null>(null);
+  const [recipeLoading, setRecipeLoading] = useState(false);
+  const [lastRecipeKey, setLastRecipeKey] = useState<string>("");
   
   // Results State
   const [optResults, setOptResults] = useState<any>(null);
@@ -333,6 +366,42 @@ export default function App() {
       setIngredients(scaledList);
     }
   }, [servings, baseIngredients]);
+
+  const fetchRecipeIfNeeded = async () => {
+    const currentDish = isCustomDish ? customDish : selectedDish;
+    if (!currentDish || ingredients.length === 0) return;
+    
+    const key = `${currentDish.toLowerCase().trim()}-${servings}-${JSON.stringify(ingredients)}`;
+    if (key === lastRecipeKey && recipe) return;
+
+    setRecipeLoading(true);
+    try {
+      const res = await fetch("/api/generate-recipe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dish: currentDish,
+          servings: servings,
+          ingredients: ingredients.map(i => ({ name: i.name, qty: i.qty }))
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRecipe(data);
+        setLastRecipeKey(key);
+      }
+    } catch (err) {
+      console.error("Error loading recipe:", err);
+    } finally {
+      setRecipeLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "recipe") {
+      fetchRecipeIfNeeded();
+    }
+  }, [activeTab, ingredients, servings]);
 
   // Initial trigger
   useEffect(() => {
@@ -1453,7 +1522,13 @@ export default function App() {
           {optResults ? (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Cheapest Single Store */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs flex flex-col justify-between transition-all hover:border-slate-300">
+              <div className="bg-white rounded-xl border border-slate-200 p-4.5 shadow-xs flex flex-col justify-between transition-all hover:border-slate-300 relative">
+                {!optResults.cheapestSingleStore.all_ingredients_found && (
+                  <div className="absolute -top-2 -right-2 bg-amber-50 border border-amber-200 text-amber-800 px-2 py-1 rounded-full text-[9px] font-bold flex items-center gap-1">
+                    <AlertTriangle className="w-2.5 h-2.5" />
+                    <span>Incomplete</span>
+                  </div>
+                )}
                 <div className="flex justify-between items-start">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Cheapest Single Store</span>
                   <ShoppingBag className="w-4 h-4 text-slate-400" />
@@ -1461,6 +1536,12 @@ export default function App() {
                 <div className="my-2">
                   <h3 className="text-xl font-extrabold text-slate-900">${optResults.cheapestSingleStore.total_purchase?.toFixed(2)}</h3>
                   <p className="text-xs text-slate-500 font-semibold truncate mt-0.5">Pak'nSave {optResults.cheapestSingleStore.store}</p>
+                  {!optResults.cheapestSingleStore.all_ingredients_found && (
+                    <p className="text-[10px] text-amber-700 font-semibold mt-1 flex items-center gap-1">
+                      <AlertTriangle className="w-2.5 h-2.5" />
+                      Missing {ingredients.length - optResults.cheapestSingleStore.items_found} ingredient(s)
+                    </p>
+                  )}
                 </div>
                 <div className="text-[10px] text-slate-400 flex items-center gap-1 border-t border-slate-100 pt-1.5 mt-1 font-semibold">
                   <Navigation className="w-3 h-3 text-emerald-500" />
@@ -1529,15 +1610,33 @@ export default function App() {
               </button>
 
               <button
-                onClick={() => setActiveTab("list")}
+                onClick={() => {
+                  setActiveTab("tuner");
+                  // Auto-select first ingredient as active tuning target if none is selected
+                  if (ingredients.length > 0 && !tuningIngredient) {
+                    selectTuningIngredient(ingredients[0].name);
+                  }
+                }}
                 className={`py-2.5 px-4 text-xs font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
-                  activeTab === "list" 
+                  activeTab === "tuner" 
                     ? "border-slate-900 text-slate-900 font-extrabold" 
                     : "border-transparent text-slate-500 hover:text-slate-800"
                 }`}
               >
-                <Check className="w-4 h-4" />
-                Shopping Checklist
+                <Sliders className="w-4 h-4" />
+                AI Match Tuner
+              </button>
+
+              <button
+                onClick={() => setActiveTab("recipe")}
+                className={`py-2.5 px-4 text-xs font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === "recipe" 
+                    ? "border-slate-900 text-slate-900 font-extrabold" 
+                    : "border-transparent text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <ChefHat className="w-4 h-4" />
+                Recipe Guide
               </button>
 
               <button
@@ -1565,21 +1664,15 @@ export default function App() {
               </button>
 
               <button
-                onClick={() => {
-                  setActiveTab("tuner");
-                  // Auto-select first ingredient as active tuning target if none is selected
-                  if (ingredients.length > 0 && !tuningIngredient) {
-                    selectTuningIngredient(ingredients[0].name);
-                  }
-                }}
+                onClick={() => setActiveTab("list")}
                 className={`py-2.5 px-4 text-xs font-bold border-b-2 transition-all cursor-pointer flex items-center gap-1.5 ${
-                  activeTab === "tuner" 
+                  activeTab === "list" 
                     ? "border-slate-900 text-slate-900 font-extrabold" 
                     : "border-transparent text-slate-500 hover:text-slate-800"
                 }`}
               >
-                <Sliders className="w-4 h-4" />
-                AI Match Tuner
+                <Check className="w-4 h-4" />
+                Shopping Checklist
               </button>
             </div>
 
@@ -1587,9 +1680,126 @@ export default function App() {
             <div className="p-5 flex-1 flex flex-col">
               
               {/* TAB 1: COMPARISON MATRIX */}
-              {activeTab === "matrix" && (
-                <div className="flex-1 flex flex-col">
-                  {optResults ? (
+              {activeTab === "matrix" && (() => {
+                if (!optResults) {
+                  return (
+                    <div className="py-16 text-center text-slate-400 flex flex-col items-center justify-center">
+                      <RefreshCw className="w-8 h-8 animate-spin mb-3 text-slate-300" />
+                      <p className="text-sm font-medium">Querying local New Zealand supermarket catalogs...</p>
+                    </div>
+                  );
+                }
+
+                // Calculate store totals dynamically based on currently matched products (respecting overrides/custom rules)
+                const dynamicStoreTotals = optResults.nearbyStores.map((store: any) => {
+                  let totalPurchase = 0;
+                  let totalPortion = 0;
+                  let itemsFound = 0;
+                  
+                  ingredients.forEach((ing) => {
+                    let storeMatches: any[] = [];
+                    if (optResults.allFoundProducts) {
+                      const storeProducts = optResults.allFoundProducts[store.store_id]?.[ing.name] || [];
+                      storeProducts.forEach((p: any) => {
+                        const override = productOverrides[p.name];
+                        let matched = p.is_matched;
+                        if (override === 'exclude') matched = false;
+                        else if (override === 'include') matched = true;
+                        else {
+                          const rule = customRules[ing.name];
+                          if (rule) {
+                            const pName = p.name.toLowerCase();
+                            if (rule.exclude) {
+                              const excludeKeywords = rule.exclude.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+                              if (excludeKeywords.length > 0 && excludeKeywords.some((kw: string) => pName.includes(kw))) {
+                                matched = false;
+                              }
+                            }
+                            if (rule.include) {
+                              const includeKeywords = rule.include.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+                              if (includeKeywords.length > 0 && !includeKeywords.some((kw: string) => pName.includes(kw))) {
+                                matched = false;
+                              }
+                            }
+                          }
+                        }
+
+                        if (matched) {
+                          storeMatches.push(p);
+                        }
+                      });
+                    } else {
+                      storeMatches = optResults.results.filter((r: any) => r.ingredient === ing.name && r.store === store.name);
+                    }
+
+                    if (storeMatches.length > 0) {
+                      const bestMatch = [...storeMatches].sort((a, b) => a.portion_cost - b.portion_cost)[0];
+                      totalPurchase += bestMatch.purchase_cost;
+                      totalPortion += bestMatch.portion_cost;
+                      itemsFound++;
+                    }
+                  });
+
+                  return {
+                    store_id: store.store_id,
+                    name: store.name,
+                    total_purchase: totalPurchase,
+                    total_portion: totalPortion,
+                    items_found: itemsFound
+                  };
+                });
+
+                let dynamicOptimalPurchase = 0;
+                let dynamicOptimalPortion = 0;
+
+                ingredients.forEach((ing) => {
+                  let allMatchedForIng: any[] = [];
+                  optResults.nearbyStores.forEach((store: any) => {
+                    if (optResults.allFoundProducts) {
+                      const storeProducts = optResults.allFoundProducts[store.store_id]?.[ing.name] || [];
+                      storeProducts.forEach((p: any) => {
+                        const override = productOverrides[p.name];
+                        let matched = p.is_matched;
+                        if (override === 'exclude') matched = false;
+                        else if (override === 'include') matched = true;
+                        else {
+                          const rule = customRules[ing.name];
+                          if (rule) {
+                            const pName = p.name.toLowerCase();
+                            if (rule.exclude) {
+                              const excludeKeywords = rule.exclude.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+                              if (excludeKeywords.length > 0 && excludeKeywords.some((kw: string) => pName.includes(kw))) {
+                                matched = false;
+                              }
+                            }
+                            if (rule.include) {
+                              const includeKeywords = rule.include.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+                              if (includeKeywords.length > 0 && !includeKeywords.some((kw: string) => pName.includes(kw))) {
+                                matched = false;
+                              }
+                            }
+                          }
+                        }
+
+                        if (matched) {
+                          allMatchedForIng.push(p);
+                        }
+                      });
+                    } else {
+                      const directMatches = optResults.results.filter((r: any) => r.ingredient === ing.name);
+                      allMatchedForIng.push(...directMatches);
+                    }
+                  });
+
+                  if (allMatchedForIng.length > 0) {
+                    const bestAll = [...allMatchedForIng].sort((a, b) => a.portion_cost - b.portion_cost)[0];
+                    dynamicOptimalPurchase += bestAll.purchase_cost;
+                    dynamicOptimalPortion += bestAll.portion_cost;
+                  }
+                });
+
+                return (
+                  <div className="flex-1 flex flex-col">
                     <div className="overflow-x-auto">
                       <table className="w-full text-left border-collapse">
                         <thead>
@@ -1606,8 +1816,6 @@ export default function App() {
                         </thead>
                         <tbody key={renderTrigger} className="divide-y divide-slate-100 text-xs">
                           {ingredients.map((ing, iIdx) => {
-                            // Collect ALL products for this ingredient from allFoundProducts
-                            // (includes NLP-matched AND NLP-rejected so manual overrides can bring them back)
                             let productMatches: any[] = [];
                             if (optResults.allFoundProducts) {
                               optResults.nearbyStores.forEach((store: any) => {
@@ -1627,33 +1835,28 @@ export default function App() {
 
                             // Full filter chain: manual override > custom rules > NLP match
                             productMatches = productMatches.filter((r: any) => {
-                                // 1. Manual override — highest priority
                                 const override = productOverrides[r.name];
                                 if (override === 'exclude') return false;
                                 if (override === 'include') return true;
 
-                                // 2. Custom keyword rules
                                 const rule = customRules[ing.name];
                                 if (rule) {
                                     const pName = r.name.toLowerCase();
                                     if (rule.exclude) {
-                                      const excludeKeywords = rule.exclude.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
-                                      if (excludeKeywords.length > 0 && excludeKeywords.some(kw => pName.includes(kw))) {
+                                      const excludeKeywords = rule.exclude.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+                                      if (excludeKeywords.length > 0 && excludeKeywords.some((kw: string) => pName.includes(kw))) {
                                         return false;
                                       }
                                     }
                                     if (rule.include) {
-                                      const includeKeywords = rule.include.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
-                                      if (includeKeywords.length > 0 && !includeKeywords.some(kw => pName.includes(kw))) {
+                                      const includeKeywords = rule.include.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+                                      if (includeKeywords.length > 0 && !includeKeywords.some((kw: string) => pName.includes(kw))) {
                                         return false;
                                       }
                                     }
                                 }
 
-                                // 3. NLP match as default filter
-                                // Products NLP rejected are excluded UNLESS manually included above
                                 if (!r.is_matched) return false;
-
                                 return true;
                             });
                             
@@ -1674,39 +1877,69 @@ export default function App() {
                                 </td>
 
                                 {optResults.nearbyStores.map((store: any) => {
-                                  const match = productMatches.find((m: any) => m.store === store.name);
-                                  if (!match) {
-                                    return <td key={store.store_id} className="py-3 px-3 text-slate-400 italic">Not found</td>;
+                                  const storeMatches = productMatches.filter((m: any) => m.store === store.name);
+                                  if (storeMatches.length === 0) {
+                                    return <td key={store.store_id} className="py-3 px-3 text-slate-400 italic border border-slate-100">Not found</td>;
                                   }
 
-                                  const isBest = cheapestOverall && cheapestOverall.store === store.name;
+                                  const sortedMatches = [...storeMatches].sort((a, b) => a.portion_cost - b.portion_cost);
+                                  const cheapestInStore = sortedMatches[0];
+                                  const isBestOverall = cheapestOverall && cheapestOverall.name === cheapestInStore.name && cheapestOverall.store === cheapestInStore.store;
 
                                   return (
-                                    <td key={store.store_id} className={`py-3 px-3 relative ${isBest ? "bg-emerald-50/10 font-semibold" : ""}`}>
-                                      <div className="max-w-[150px] truncate" title={match.name}>
-                                        <p className="text-slate-700 font-medium text-[11px] truncate">{match.name}</p>
-                                        <div className="flex gap-1.5 items-center mt-1 text-[10px] font-mono">
-                                          <span className="text-slate-500 font-bold">${match.price} <span className="text-slate-400">({match.units})</span></span>
+                                    <td key={store.store_id} className="py-3 px-3 border border-slate-100 align-top max-w-[200px]">
+                                      <div 
+                                        className={`p-2 rounded-lg border transition-all text-left select-none ${
+                                          isBestOverall 
+                                            ? "bg-emerald-50/70 border-emerald-300" 
+                                            : "bg-amber-50/40 border-amber-200"
+                                        }`}
+                                      >
+                                        <div className="flex items-start justify-between gap-1">
+                                          <p className="text-slate-800 font-semibold text-[11px] leading-tight truncate flex-1" title={cheapestInStore.name}>
+                                            {cheapestInStore.brand && (
+                                              <span className={`text-[8px] px-1 py-0.5 rounded-sm font-extrabold mr-1 border align-middle leading-none inline-block ${getBrandBadgeStyle(cheapestInStore.brand)}`}>
+                                                {cheapestInStore.brand}
+                                              </span>
+                                            )}
+                                            <span className="align-middle">{cheapestInStore.name}</span>
+                                          </p>
+                                          {isBestOverall ? (
+                                            <span className="w-3.5 h-3.5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[8px] font-bold shrink-0 shadow-2xs" title="Optimal Overall Match">★</span>
+                                          ) : (
+                                            <span className="w-3.5 h-3.5 rounded-full bg-amber-500 text-white flex items-center justify-center text-[8px] font-bold shrink-0 shadow-2xs" title="Cheapest In Store">✓</span>
+                                          )}
+                                        </div>
+                                        
+                                        <div className="flex justify-between items-center mt-1 text-[9px] font-mono text-slate-500">
+                                          <span>Pack: <span className="font-bold text-slate-700">${parseFloat(cheapestInStore.price).toFixed(2)}</span> <span className="text-slate-400">({cheapestInStore.units})</span></span>
                                           <span className="text-slate-300">|</span>
-                                          <span className="text-slate-400">Used: <span className="font-semibold text-slate-600">${match.portion_cost}</span></span>
+                                          <span>Used: <span className="font-extrabold text-emerald-700">${cheapestInStore.portion_cost?.toFixed(2)}</span></span>
                                         </div>
                                       </div>
                                     </td>
                                   );
                                 })}
 
-                                <td className="py-3 px-3 bg-emerald-50/35 text-right">
+                                <td className="py-3 px-3 bg-emerald-50/35 text-right border border-slate-100 align-top max-w-[200px]">
                                   {cheapestOverall ? (
                                     <div>
                                       <span className="text-[8px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded-full inline-block tracking-wide uppercase leading-none font-mono mb-1">
                                         {cheapestOverall.store.replace("Pak'nSave ", "").toUpperCase()}
                                       </span>
-                                      <p className="text-slate-800 font-bold text-[11px] truncate">{cheapestOverall.name}</p>
+                                      <p className="text-slate-800 font-bold text-[11px] truncate">
+                                        {cheapestOverall.brand && (
+                                          <span className={`text-[8px] px-1 py-0.5 rounded-sm font-extrabold mr-1 border align-middle leading-none inline-block ${getBrandBadgeStyle(cheapestOverall.brand)}`}>
+                                            {cheapestOverall.brand}
+                                          </span>
+                                        )}
+                                        <span className="align-middle">{cheapestOverall.name}</span>
+                                      </p>
                                       <p className="text-[10px] font-mono text-slate-500 mt-0.5">
-                                        Pack: ${cheapestOverall.price} <span className="text-slate-400">({cheapestOverall.units})</span>
+                                        Pack: ${parseFloat(cheapestOverall.price).toFixed(2)} <span className="text-slate-400">({cheapestOverall.units})</span>
                                       </p>
                                       <p className="text-[10px] font-mono text-emerald-800 font-bold">
-                                        Used: ${cheapestOverall.portion_cost?.toFixed(2) || cheapestOverall.portion_cost}
+                                        Used: ${cheapestOverall.portion_cost?.toFixed(2)}
                                       </p>
                                     </div>
                                   ) : (
@@ -1722,15 +1955,15 @@ export default function App() {
                             <td className="py-3 px-3 text-[10px] uppercase tracking-wider text-slate-500">Totals (Buy Pack)</td>
                             <td className="py-3 px-3"></td>
                             {optResults.nearbyStores.map((store: any) => {
-                              const storeSum = optResults.storesSummary.find((s: any) => s.store === store.name);
+                              const dynamicStore = dynamicStoreTotals.find(s => s.store_id === store.store_id);
                               return (
-                                <td key={store.store_id} className="py-3 px-3 font-mono font-extrabold text-slate-900 text-xs">
-                                  ${storeSum?.total_purchase?.toFixed(2) || "0.00"}
+                                <td key={store.store_id} className="py-3 px-3 font-mono font-extrabold text-slate-900 text-xs border border-slate-100">
+                                  ${dynamicStore?.total_purchase?.toFixed(2) || "0.00"}
                                 </td>
                               );
                             })}
-                            <td className="py-3 px-3 bg-emerald-100/40 text-emerald-950 text-right font-mono font-extrabold text-xs">
-                              ${optResults.optimizedTotalPurchase?.toFixed(2)}
+                            <td className="py-3 px-3 bg-emerald-100/40 text-emerald-950 text-right font-mono font-extrabold text-xs border border-slate-100">
+                              ${dynamicOptimalPurchase?.toFixed(2)}
                             </td>
                           </tr>
 
@@ -1739,15 +1972,15 @@ export default function App() {
                             <td className="py-3 px-3 text-[10px] uppercase tracking-wider">Portion Cost (Used)</td>
                             <td className="py-3 px-3"></td>
                             {optResults.nearbyStores.map((store: any) => {
-                              const storeSum = optResults.storesSummary.find((s: any) => s.store === store.name);
+                              const dynamicStore = dynamicStoreTotals.find(s => s.store_id === store.store_id);
                               return (
-                                <td key={store.store_id} className="py-3 px-3 font-mono text-slate-500 text-[10px]">
-                                  ${storeSum?.total_portion?.toFixed(2) || "0.00"}
+                                <td key={store.store_id} className="py-3 px-3 font-mono text-slate-500 text-[10px] border border-slate-100">
+                                  ${dynamicStore?.total_portion?.toFixed(2) || "0.00"}
                                 </td>
                               );
                             })}
-                            <td className="py-3 px-3 bg-emerald-50/20 text-emerald-800 text-right font-mono text-[10px]">
-                              ${optResults.optimizedTotalPortion?.toFixed(2)}
+                            <td className="py-3 px-3 bg-emerald-50/20 text-emerald-800 text-right font-mono text-[10px] border border-slate-100">
+                              ${dynamicOptimalPortion?.toFixed(2)}
                             </td>
                           </tr>
                         </tbody>
@@ -1761,10 +1994,174 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                  ) : (
+                  </div>
+                );
+              })()}
+
+              {/* TAB: RECIPE GUIDE */}
+              {activeTab === "recipe" && (
+                <div className="flex-1 flex flex-col">
+                  {recipeLoading ? (
                     <div className="py-16 text-center text-slate-400 flex flex-col items-center justify-center">
                       <RefreshCw className="w-8 h-8 animate-spin mb-3 text-slate-300" />
-                      <p className="text-sm font-medium">Querying local New Zealand supermarket catalogs...</p>
+                      <p className="text-sm font-medium">Assembling dynamic recipe instructions...</p>
+                      <p className="text-xs text-slate-400 mt-1 max-w-sm">Combining generated ingredients, timing profiles, and kitchen safety disclaimers...</p>
+                    </div>
+                  ) : recipe ? (
+                    <div className="space-y-6 max-w-3xl mx-auto w-full">
+                      
+                      {/* Recipe Header */}
+                      <div className="border-b border-slate-100 pb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Dynamic Culinary Guide</span>
+                          <h3 className="text-xl font-extrabold text-slate-900 capitalize flex items-center gap-2 mt-0.5">
+                            <ChefHat className="w-5 h-5 text-emerald-600" />
+                            {recipe.dishName || (isCustomDish ? customDish : selectedDish)}
+                          </h3>
+                        </div>
+                        <div className="flex flex-wrap gap-2.5 text-xs">
+                          <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full font-semibold flex items-center gap-1">
+                            Portions: <strong className="font-bold text-slate-900">{recipe.servings || servings}</strong>
+                          </span>
+                          <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full font-semibold flex items-center gap-1">
+                            Prep Time: <strong className="font-bold text-slate-900">{recipe.prepTimeMinutes || 10} mins</strong>
+                          </span>
+                          <span className="bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full font-semibold flex items-center gap-1">
+                            Cook Time: <strong className="font-bold text-slate-900">{(recipe.totalTimeMinutes - recipe.prepTimeMinutes) || 25} mins</strong>
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* AI Recipe Warning */}
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-900 leading-relaxed flex gap-3 shadow-xs">
+                        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="text-xs space-y-1">
+                          <p className="font-bold font-sans">⚠️ AI Culinary Safety Warning:</p>
+                          <p className="text-amber-800">
+                            {recipe.warning || "AI-generated recipes are experimental and might not be accurate or necessarily safe. Always exercise caution, ensure meat, seafood, or poultry is cooked to safe recommended internal temperatures, and double-check ingredients for allergen safety."}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Measurement range disclaimer */}
+                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-slate-700 text-xs">
+                        <p className="font-semibold text-slate-900 mb-1 flex items-center gap-1.5">
+                          <Info className="w-4 h-4 text-slate-500" />
+                          Flexible Cooking & Ingredient Ranges
+                        </p>
+                        <p className="text-slate-600 leading-relaxed">
+                          {recipe.measurementDisclaimer || "Measurements do not have to be rigid. You can adjust the weights or ingredient quantities within a reasonable range according to your family's preferences, taste, and the actual pack sizes purchased at your local Pak'nSave."}
+                        </p>
+                      </div>
+
+                      {/* Ingredients Section */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        
+                        {/* Generated Ingredients (In Stock / Bought) */}
+                        <div className="bg-white rounded-xl border border-slate-200 p-4.5">
+                          <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3 flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                            Generated Ingredients (Used)
+                          </h4>
+                          <ul className="space-y-2 text-xs">
+                            {(recipe.generatedIngredientsUsed || ingredients).map((ing: any, idx: number) => (
+                              <li key={idx} className="flex items-start gap-2 text-slate-700">
+                                <span className="text-emerald-600 font-bold mt-0.5">✓</span>
+                                <span className="flex-1">
+                                  <strong className="font-semibold text-slate-900 capitalize">{ing.name}</strong>
+                                  <span className="text-slate-400 ml-1 font-mono">({ing.qty})</span>
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
+                        {/* Additional Pantry Staples Needed */}
+                        <div className="bg-white rounded-xl border border-slate-200 p-4.5">
+                          <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3 flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                            <span className="w-2 h-2 rounded-full bg-slate-400"></span>
+                            Additional Pantry Essentials
+                          </h4>
+                          <p className="text-[10px] text-slate-400 font-medium mb-3">
+                            Common household staples you will need from your pantry (not generated as store purchases):
+                          </p>
+                          <ul className="space-y-2 text-xs">
+                            {(recipe.additionalIngredientsNeeded || [
+                              { name: "Salt & Black Pepper", qty: "to taste" },
+                              { name: "Cooking Oil or Butter", qty: "1-2 tbsp" },
+                              { name: "Water", qty: "as needed" }
+                            ]).map((ing: any, idx: number) => (
+                              <li key={idx} className="flex items-start gap-2 text-slate-600">
+                                <span className="text-slate-400 mt-0.5">•</span>
+                                <span className="flex-1">
+                                  <span className="font-semibold text-slate-800 capitalize">{ing.name}</span>
+                                  {ing.qty && <span className="text-slate-400 ml-1 font-mono">({ing.qty})</span>}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+
+                      </div>
+
+                      {/* Cooking Steps Timeline */}
+                      <div className="bg-white rounded-xl border border-slate-200 p-5">
+                        <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-5 border-b border-slate-100 pb-3 flex items-center gap-1.5">
+                          <ListOrdered className="w-4 h-4 text-slate-500" />
+                          Step-by-Step Culinary Instructions
+                        </h4>
+                        
+                        <div className="space-y-6 relative border-l-2 border-slate-100 pl-5 ml-2.5">
+                          {(recipe.cookingSteps || []).map((step: any, idx: number) => (
+                            <div key={idx} className="relative">
+                              {/* Timeline dot */}
+                              <div className="absolute -left-[29px] top-0.5 bg-slate-900 text-white rounded-full w-4.5 h-4.5 flex items-center justify-center text-[10px] font-bold shadow-xs">
+                                {step.stepNumber || (idx + 1)}
+                              </div>
+                              
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                  <h5 className="font-bold text-slate-900 text-sm leading-none">{step.title}</h5>
+                                  {step.durationMinutes && (
+                                    <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
+                                      ⏰ {step.durationMinutes} mins
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-600 leading-relaxed pt-1">
+                                  {step.instruction}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Total Timing Summary Card */}
+                        <div className="bg-emerald-50/30 border border-emerald-100 rounded-lg p-4.5 mt-6 flex justify-between items-center text-xs text-slate-700">
+                          <div>
+                            <p className="font-bold text-slate-800">Culinary Timing Summary</p>
+                            <p className="text-slate-500 text-[10px] mt-0.5">Total estimated workspace dedication required</p>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-lg font-extrabold text-slate-900">{recipe.totalTimeMinutes || 35} minutes</span>
+                            <p className="text-[10px] text-emerald-800 font-semibold mt-0.5">Ready to serve hot!</p>
+                          </div>
+                        </div>
+
+                      </div>
+
+                    </div>
+                  ) : (
+                    <div className="py-16 text-center text-slate-400 flex flex-col items-center justify-center">
+                      <ChefHat className="w-10 h-10 text-slate-300 mb-3" />
+                      <p className="text-sm font-semibold">No Recipe Found</p>
+                      <p className="text-xs text-slate-400 mt-1">Please make sure ingredients are loaded before viewing the recipe guide.</p>
+                      <button
+                        onClick={fetchRecipeIfNeeded}
+                        className="mt-4 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all"
+                      >
+                        Generate Recipe Guide Now
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1948,7 +2345,7 @@ export default function App() {
                     <div className="w-full max-w-2xl flex flex-col items-center">
                       <div className="flex items-center justify-between w-full border-b border-slate-100 pb-2 mb-4">
                         <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                          Relative Vector Map of Local Pak'nSave Outlets
+                          Map of nearby Local Pak'nSave Outlets
                         </span>
                         <span className="text-[10px] text-slate-400 font-bold">Center represents you</span>
                       </div>
