@@ -1,4 +1,4 @@
-# NZ MealCost Optimizer - AI Agent Guidelines
+# NZ Meal Cost Optimizer - AI Agent Guidelines
 
 This document contains instructions, rules, and guardrails for the Gemini models powering the Dish Builder, the Supermarket Product Filter, and the Culinary Leftovers Chat Assistant.
 

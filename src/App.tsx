@@ -1,6 +1,7 @@
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import { divIcon } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import Markdown from 'react-markdown';
 
 import React, { useState, useEffect, useRef } from "react";
 import { 
@@ -727,7 +728,7 @@ export default function App() {
 
     // Add user message
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const updatedHistory = [...agentHistory, { sender: "user", text, timestamp }];
+    const updatedHistory: AgentChatBubble[] = [...agentHistory, { sender: "user" as const, text, timestamp }];
     setAgentHistory(updatedHistory);
 
     // Process step
@@ -738,7 +739,7 @@ export default function App() {
       setAgentHistory([
         ...updatedHistory,
         {
-          sender: "agent",
+          sender: "agent" as const,
           text: `Sweet! I've marked your location as **${text}**. \n\nNext, what delicious meal are we cooking today? You can select a preset recipe like **Spaghetti Bolognese** or **Chicken Stir Fry**, or type any custom dish you can dream of!`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
@@ -764,7 +765,7 @@ export default function App() {
       setAgentHistory([
         ...updatedHistory,
         {
-          sender: "agent",
+          sender: "agent" as const,
           text: `Awesome choice! I'm fetching the core recipe ingredients for **${text}**. \n\nHow far are you willing to travel to get the best prices at nearby Pak'nSave outlets? (Specify your maximum search radius in kilometers)`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
@@ -780,7 +781,7 @@ export default function App() {
       setAgentHistory([
         ...updatedHistory,
         {
-          sender: "agent",
+          sender: "agent" as const,
           text: `Understood, searching within a **${validRadius}km** radius. \n\nNow, how many portion servings are we preparing? I will automatically scale the raw ingredients to match your group size perfectly!`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
@@ -793,7 +794,7 @@ export default function App() {
       setAgentHistory([
         ...updatedHistory,
         {
-          sender: "agent",
+          sender: "agent" as const,
           text: `Excellent! I have successfully generated and scaled the ingredient portion list for **${servings} people**. \n\nReview your active shopping list below. You can modify any individual portion size, add custom ingredients, or click the **Run Optimizer** button to find the absolute cheapest combination of stores!`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
@@ -853,47 +854,30 @@ export default function App() {
 
   // Clean Markdown formatter helper for the AI Report
   const renderAIReport = (markdownText: string) => {
-    if (!markdownText) return <p>Analyzing data...</p>;
+    if (!markdownText) return <p className="text-xs text-slate-400">Analyzing data...</p>;
     
-    const lines = markdownText.split("\n");
-    return lines.map((line, idx) => {
-      const trimmed = line.trim();
-      
-      // Headers
-      if (trimmed.startsWith("###")) {
-        return <h4 key={idx} id={`report-h3-${idx}`} className="text-sm font-bold text-slate-800 mt-4 mb-2">{trimmed.replace(/^###\s*/, "")}</h4>;
-      }
-      if (trimmed.startsWith("##")) {
-        return <h3 key={idx} id={`report-h2-${idx}`} className="text-md font-bold text-slate-900 mt-5 mb-2 border-b border-slate-100 pb-1">{trimmed.replace(/^##\s*/, "")}</h3>;
-      }
-      if (trimmed.startsWith("#")) {
-        return <h2 key={idx} id={`report-h1-${idx}`} className="text-lg font-bold text-slate-950 mt-6 mb-3">{trimmed.replace(/^#\s*/, "")}</h2>;
-      }
-
-      // Bullet points
-      if (trimmed.startsWith("-") || trimmed.startsWith("*")) {
-        const text = trimmed.replace(/^[-*]\s*/, "");
-        const boldParts = text.split("**");
-        if (boldParts.length > 2) {
-          return (
-            <li key={idx} id={`report-li-${idx}`} className="ml-4 list-disc text-xs text-slate-600 mb-1.5 leading-relaxed">
-              {boldParts.map((part, i) => i % 2 === 1 ? <strong key={i} className="font-semibold text-slate-800">{part}</strong> : part)}
-            </li>
-          );
-        }
-        return <li key={idx} id={`report-li-${idx}`} className="ml-4 list-disc text-xs text-slate-600 mb-1.5 leading-relaxed">{text}</li>;
-      }
-
-      // Strong paragraphs
-      if (trimmed.startsWith("**") && trimmed.endsWith("**")) {
-        return <p key={idx} id={`report-p-${idx}`} className="text-xs font-semibold text-slate-800 my-2">{trimmed.replace(/^\*\*|\*\*$/g, "")}</p>;
-      }
-
-      // Regular text
-      if (trimmed === "") return <div key={idx} className="h-2"></div>;
-
-      return <p key={idx} id={`report-p-${idx}`} className="text-xs text-slate-600 my-1 leading-relaxed">{trimmed}</p>;
-    });
+    return (
+      <div className="markdown-body prose prose-slate max-w-none text-xs text-slate-700 leading-relaxed">
+        <Markdown
+          components={{
+            h1: ({ children, ...props }: any) => <h1 {...props} className="text-lg font-bold text-slate-950 mt-6 mb-3 border-b border-slate-200 pb-1">{children}</h1>,
+            h2: ({ children, ...props }: any) => <h2 {...props} className="text-md font-bold text-slate-900 mt-5 mb-2 border-b border-slate-100 pb-1">{children}</h2>,
+            h3: ({ children, ...props }: any) => <h3 {...props} className="text-sm font-bold text-slate-800 mt-4 mb-2">{children}</h3>,
+            h4: ({ children, ...props }: any) => <h4 {...props} className="text-xs font-bold text-slate-700 mt-3 mb-1">{children}</h4>,
+            p: ({ children, ...props }: any) => <p {...props} className="text-xs text-slate-600 my-2 leading-relaxed">{children}</p>,
+            ul: ({ children, ...props }: any) => <ul {...props} className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+            ol: ({ children, ...props }: any) => <ol {...props} className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+            li: ({ children, ...props }: any) => <li {...props} className="text-xs text-slate-600 leading-relaxed mb-0.5">{children}</li>,
+            strong: ({ children, ...props }: any) => <strong {...props} className="font-bold text-slate-800">{children}</strong>,
+            em: ({ children, ...props }: any) => <em {...props} className="italic text-slate-600">{children}</em>,
+            blockquote: ({ children, ...props }: any) => <blockquote {...props} className="border-l-4 border-slate-200 pl-4 italic text-slate-500 my-2">{children}</blockquote>,
+            code: ({ children, ...props }: any) => <code {...props} className="font-mono text-[10px] bg-slate-100 px-1 py-0.5 rounded text-slate-800">{children}</code>,
+          }}
+        >
+          {markdownText}
+        </Markdown>
+      </div>
+    );
   };
 
   // Group matched ingredients by store for checklist
@@ -998,7 +982,7 @@ export default function App() {
             <DollarSign className="w-5 h-5 text-emerald-400" />
           </div>
           <div>
-            <h1 className="text-md font-bold text-slate-900 tracking-tight leading-none uppercase">NZ MealCost Optimizer</h1>
+            <h1 className="text-md font-bold text-slate-900 tracking-tight leading-none uppercase">NZ Meal Cost Optimizer</h1>
             <p className="text-[11px] text-slate-500 font-medium mt-1">Smart Portion-Matching across Pak'nSave Stores</p>
           </div>
         </div>
@@ -2301,7 +2285,26 @@ export default function App() {
                               ? "bg-slate-900 text-white font-medium rounded-tr-none shadow-xs" 
                               : "bg-white border border-slate-200 text-slate-800 rounded-tl-none shadow-2xs"
                           }`}>
-                            {chat.text}
+                            {chat.role === "user" ? (
+                              chat.text
+                            ) : (
+                              <Markdown
+                                components={{
+                                  h1: ({ children, ...props }: any) => <h1 {...props} className="text-xs font-bold text-slate-900 mt-2 mb-1 border-b border-slate-100 pb-0.5">{children}</h1>,
+                                  h2: ({ children, ...props }: any) => <h2 {...props} className="text-xs font-bold text-slate-800 mt-2 mb-1">{children}</h2>,
+                                  h3: ({ children, ...props }: any) => <h3 {...props} className="text-xs font-semibold text-slate-800 mt-1.5 mb-1">{children}</h3>,
+                                  p: ({ children, ...props }: any) => <p {...props} className="text-xs text-slate-700 my-1 leading-relaxed">{children}</p>,
+                                  ul: ({ children, ...props }: any) => <ul {...props} className="list-disc pl-4 my-1 space-y-0.5">{children}</ul>,
+                                  ol: ({ children, ...props }: any) => <ol {...props} className="list-decimal pl-4 my-1 space-y-0.5">{children}</ol>,
+                                  li: ({ children, ...props }: any) => <li {...props} className="text-xs text-slate-700 leading-relaxed">{children}</li>,
+                                  strong: ({ children, ...props }: any) => <strong {...props} className="font-bold text-slate-900">{children}</strong>,
+                                  em: ({ children, ...props }: any) => <em {...props} className="italic text-slate-600">{children}</em>,
+                                  code: ({ children, ...props }: any) => <code {...props} className="font-mono text-[9px] bg-slate-100 px-1 py-0.5 rounded text-slate-800">{children}</code>,
+                                }}
+                              >
+                                {chat.text}
+                              </Markdown>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -2745,7 +2748,7 @@ export default function App() {
 
       {/* FOOTER METRICS */}
       <footer id="app-footer" className="bg-white border-t border-slate-200 py-4.5 px-6 text-center text-xs text-slate-400 mt-10">
-        <p className="font-medium">© 2026 NZ MealCost Optimizer • Polished with premium design guidelines & deep culinary AI models.</p>
+        <p className="font-medium">© 2026 NZ Meal Cost Optimizer • Polished with premium design guidelines & deep culinary AI models.</p>
         <p className="text-[10px] text-slate-300 mt-1 font-semibold">Database estimates represent Auckland regional catalogs. Direct APIs cached for fast comparison matching.</p>
       </footer>
     </div>

@@ -1,5 +1,5 @@
 {
-  "name": "NZ MealCost Optimizer",
+  "name": "NZ Meal Cost Optimizer",
   "description": "Portion-matched ingredient price optimizer across New Zealand Pak'nSave stores.",
   "requestFramePermissions": [
     "geolocation"
