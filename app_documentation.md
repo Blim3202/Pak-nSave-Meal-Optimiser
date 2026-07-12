@@ -1,47 +1,53 @@
-# Pak'nSave Meal Optimizer - Documentation
+# NZ Meal Cost Optimizer - App Documentation
 
 ## 1. Overview
-The **Pak'nSave Meal Optimizer** is a specialized AI-powered application designed for the New Zealand consumer market. Its primary objective is to streamline meal planning and grocery shopping by intelligently decomposing desired dishes into specific, supermarket-friendly raw ingredients. By integrating with local retail knowledge, the app aims to reduce shopping complexity, minimize food waste, and provide culinary guidance tailored to NZ household habits.
+The **NZ Meal Cost Optimizer** is an AI-powered web application for the New Zealand consumer market. It breaks down meals into raw ingredients, searches real Pak'nSave product catalogs across 60+ stores, and finds the cheapest combination of purchases using smart portion-cost matching.
 
-## 2. Core Functional Agents
-The application's intelligence is distributed across three specialized AI agents, each serving a distinct purpose in the meal-to-shopping pipeline:
+## 2. Core AI Agents
+Three Gemini-powered agents drive the application:
 
 ### A. Dish Ingredient Generator
-This agent is the entry point. It converts a user-defined meal (e.g., "Spaghetti Bolognese") into a structured list of essential raw ingredients.
-- **Constraints**: Focuses on 4-8 high-impact ingredients.
-- **Scaling**: Dynamically adjusts quantities based on the number of servings, targeting standard NZ retail unit sizes (e.g., 500g, 400g cans).
-- **Rule**: Strictly prohibits pre-made or processed meals, ensuring the user shops for fresh, base-level ingredients.
+Converts a meal name (preset or custom) into 4–8 core raw ingredients with NZ retail portion sizes.
+- **Model**: `gemini-3.1-flash-lite` with structured JSON output (schema-validated)
+- **Fallback**: 20+ preset recipes in `src/data/dishes.ts` when Gemini is unavailable
+- **Portion Scaling**: Quantities dynamically scale from 4-serving base to user-specified servings
 
 ### B. Supermarket NLP Profiler
-Once ingredients are generated, this agent creates a semantic "search profile" for each item to ensure accurate mapping to supermarket inventory.
-- **Noise Reduction**: Uses negative keywords to filter out irrelevant products (e.g., searching for "onion" but excluding "onion-flavored chips" or "onion wraps").
-- **Precision**: Handles synonyms (e.g., "beef mince" vs. "ground beef") and maps ingredients to appropriate aisle categories.
+Creates semantic search profiles per ingredient to filter out irrelevant products from the Pak'nSave API.
+- **Positive/Negative Keywords**: Gemini generates include/exclude keyword lists for each ingredient
+- **Synonym Handling**: Maps alternate names (e.g., "ground beef" for "beef mince")
+- **Custom Rules**: User-defined include/exclude rules are injected into the LLM prompt
 
-### C. Leftover & Cooking Assistant
-The interactive component of the app that provides post-shopping guidance.
-- **Culinary Advice**: Offers storage tips and preparation techniques suitable for NZ kitchens.
-- **Waste Reduction**: Smartly suggests follow-up meals that utilize leftover ingredients from previous shops.
-- **Tone**: Focused on actionable, brief, and friendly guidance.
+### C. Recipe Generator & Chat Assistant
+Two post-optimization features:
+- **Recipe Guide** (`/api/generate-recipe`): Generates step-by-step cooking instructions with timing and safety warnings
+- **Culinary Chat** (`/api/chat`): Conversational Q&A about leftovers, storage, and ingredient swaps
 
-## 3. How It Works (Technical Flow)
-The application operates as a reactive web application that orchestrates interaction between the user, the LLM backend (Gemini), and the UI:
-
-1.  **Input Gathering**: The user interacts with the React frontend to specify location, dish preference, and budget/dietary constraints.
-2.  **Orchestration**: The `App.tsx` component manages the state machine of the user journey (Location -> Dish -> Distance/Radius).
-3.  **LLM Processing**: For each step, the app sends context to the Gemini backend, which triggers the appropriate agent based on the `AGENTS.md` guidelines.
-4.  **Data Retrieval**: The application maps the processed ingredients against internal store data (`src/data/stores.ts`) and dish repository (`src/data/dishes.ts`) to provide actionable shopping results.
-5.  **Reactive UI**: The frontend dynamically updates to show progress, ingredient lists, and shopping suggestions, maintaining a clean state without unnecessary re-renders or page reloads.
+## 3. Technical Flow
+1. **Location Input** — Address or GPS coordinates → geocoded to lat/lon
+2. **Dish Selection** — Preset or custom dish → ingredient list via Gemini or local cache
+3. **Portion Scaling** — Ingredients scaled to user-specified servings
+4. **Store Proximity** — 60 Pak'nSave stores filtered by Haversine distance within user's radius (top 3)
+5. **Product Search** — Real Pak'nSave mobile API queried per ingredient per store
+6. **NLP Filtering** — Gemini-generated keyword profiles applied via `nlpFilterProducts()`
+7. **Cost Optimization** — Portion-cost calculation finds cheapest per-ingredient and per-store totals
+8. **Reporting** — Comparison matrix, shopping checklist, store map, and AI-generated markdown report
 
 ## 4. Technical Stack
-- **Frontend**: React (TypeScript) for the UI, utilizing Tailwind CSS for styling and `lucide-react` for iconography.
-- **Backend/Integration**: Vite-based development environment. Employs asynchronous communication with the Gemini API to handle the intelligence layers.
-- **Data Architecture**: Structured JSON-based data stores for dishes and store information, ensuring rapid lookups.
-- **Agent Governance**: The `AGENTS.md` file serves as a system-prompt configuration, ensuring consistent behavior across all AI-driven interactions.
+| Layer | Technology |
+|---|---|
+| Frontend | React 19, TypeScript, Tailwind CSS 4, Vite 6 |
+| Backend | Express 4, tsx (dev runner) |
+| AI | Google Gemini API (`@google/genai`) — model `gemini-3.1-flash-lite` |
+| Maps | Leaflet + react-leaflet (OpenStreetMap tiles) |
+| Icons | lucide-react |
+| Data | Static JSON stores (60 stores, 20+ recipes) |
 
-## 5. User Workflow
-1.  **Start**: The user opens the application.
-2.  **Define**: The user selects or enters a suburb/address (to determine the local Pak'nSave branch).
-3.  **Select**: The user picks a dish (or enters a custom one).
-4.  **Process**: The system generates the raw ingredient list.
-5.  **Refine**: The NLP profiler generates search terms for the store.
-6.  **Assist**: The user receives the shopping list and can ask the Assistant for storage tips or reuse recipes for leftovers.
+## 5. API Endpoints
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/geocode?address=...` | Geocode address to lat/lon (Nominatim + known-location cache) |
+| POST | `/api/dish-ingredients` | Break down dish into raw ingredients with portion sizes |
+| POST | `/api/optimize` | Full price optimization pipeline (NDJSON stream) |
+| POST | `/api/generate-recipe` | Generate step-by-step cooking instructions |
+| POST | `/api/chat` | Conversational cooking & leftovers assistant |

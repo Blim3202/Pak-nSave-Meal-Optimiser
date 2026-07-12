@@ -9,8 +9,23 @@ import { DISHES, DISH_QUANTITIES } from "./src/data/dishes.ts";
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Safely derive directory name in both ES modules and CommonJS
+let derivedFilename = "";
+let derivedDirname = "";
+
+try {
+  // @ts-ignore
+  derivedFilename = __filename;
+  // @ts-ignore
+  derivedDirname = __dirname;
+} catch (e) {
+  // ESM environment where __filename / __dirname are not declared in scope
+  derivedFilename = fileURLToPath(import.meta.url);
+  derivedDirname = path.dirname(derivedFilename);
+}
+
+const __filename = derivedFilename;
+const __dirname = derivedDirname;
 
 // Initialize Gemini client (server-side only)
 let ai: GoogleGenAI | null = null;
@@ -659,6 +674,7 @@ Respond ONLY with a JSON object containing "ingredients" (array of strings) and 
 // Simple top-level in-memory product catalog cache to prevent rate-limiting and make rule tuning instant
 const productSearchCache: Record<string, any[]> = {};
 const nlpProfileCache: Record<string, any> = {};
+const customInstructionCache: Record<string, Record<string, boolean>> = {};
 const aiReportCache: Record<string, string> = {};
 const dishBreakdownCache: Record<string, any> = {};
 const recipeCache: Record<string, any> = {};
@@ -899,12 +915,13 @@ app.post("/api/optimize", async (req, res) => {
   
   if (ai) {
     try {
-      logs.push(`${timestamp()} Performing smart semantic analysis on ingredient list using Gemini NLP...`);
+      const missingIngredientsMetadata: any[] = [];
+      const cacheKeysForMissing: Record<string, string> = {}; // ingredient name -> cacheKey
       
-      const ingredientsMetadata = ingredients.map((ing: string) => {
+      ingredients.forEach((ing: string) => {
         const requiredQty = quantities[ing] || "1 unit";
         const rule = customRules?.[ing];
-        return {
+        const itemMetadata = {
           ingredient_name: ing,
           quantity: requiredQty,
           is_fresh_unprocessed: !ing.toLowerCase().includes("canned") && 
@@ -918,13 +935,17 @@ app.post("/api/optimize", async (req, res) => {
             custom_instruction: rule.customPrompt || ""
           } : undefined
         };
+        const itemCacheKey = JSON.stringify(itemMetadata);
+        if (nlpProfileCache[itemCacheKey]) {
+          nlpProfiles[ing] = nlpProfileCache[itemCacheKey];
+        } else {
+          missingIngredientsMetadata.push(itemMetadata);
+          cacheKeysForMissing[ing] = itemCacheKey;
+        }
       });
 
-      const cacheKey = JSON.stringify(ingredientsMetadata);
-      if (nlpProfileCache[cacheKey]) {
-        Object.assign(nlpProfiles, nlpProfileCache[cacheKey]);
-        logs.push(`${timestamp()} [Cache Hit] Loaded NLP profiles from cache.`);
-      } else {
+      if (missingIngredientsMetadata.length > 0) {
+        logs.push(`${timestamp()} Performing smart semantic analysis on ${missingIngredientsMetadata.length} uncached ingredient(s) using Gemini NLP...`);
         const profilePrompt = `We are optimizing grocery prices for the dish "${dish}".
 For each of the following ingredients (along with their metadata of expected quantity/portion size, raw status, and any custom user rules), analyze their physical characteristics to prevent supermarket search engine pollution. Supermarkets often return unrelated processed items containing or flavoured with the ingredient.
 For example:
@@ -943,7 +964,7 @@ For each ingredient, define:
 4. "allowed_synonyms": Acceptable alternative names or synonyms (e.g., ["brown onion", "red onion", "white onion", "loose onion"]).
 
 Ingredients with metadata to analyze:
-${JSON.stringify(ingredientsMetadata, null, 2)}
+${JSON.stringify(missingIngredientsMetadata, null, 2)}
 
 Respond ONLY with a JSON object where each key is the exact ingredient name from the list, mapping to an object with "expected_category", "positive_keywords", "negative_keywords", and "allowed_synonyms".`;
 
@@ -970,10 +991,17 @@ Respond ONLY with a JSON object where each key is the exact ingredient name from
 
         if (profileResponse.text) {
           const parsed = JSON.parse(profileResponse.text.trim());
-          Object.assign(nlpProfiles, parsed);
-          nlpProfileCache[cacheKey] = parsed;
-          logs.push(`${timestamp()} Gemini NLP matching profiles generated for: ${Object.keys(nlpProfiles).join(", ")}.`);
+          Object.keys(parsed).forEach((ing) => {
+            const itemCacheKey = cacheKeysForMissing[ing];
+            if (itemCacheKey) {
+              nlpProfileCache[itemCacheKey] = parsed[ing];
+            }
+            nlpProfiles[ing] = parsed[ing];
+          });
+          logs.push(`${timestamp()} Gemini NLP matching profiles generated for: ${Object.keys(parsed).join(", ")}.`);
         }
+      } else {
+        logs.push(`${timestamp()} [Cache Hit] Loaded all ingredient NLP profiles from cache.`);
       }
     } catch (err) {
       console.error("Failed to generate Gemini NLP profiles:", err);
@@ -1250,6 +1278,198 @@ Respond ONLY with a JSON object where each key is the exact ingredient name from
     }
   });
   res.end();
+});
+
+
+// Quick route to get single-ingredient Gemini NLP profile for tuning
+app.post("/api/nlp-profile", async (req, res) => {
+  const { dish, ingredient, quantity, customRule } = req.body;
+  if (!ingredient) {
+    return res.status(400).json({ error: "Ingredient is required" });
+  }
+
+  if (!ai) {
+    return res.json({
+      expected_category: "Pantry",
+      positive_keywords: [ingredient.toLowerCase()],
+      negative_keywords: [],
+      allowed_synonyms: []
+    });
+  }
+
+  try {
+    const requiredQty = quantity || "1 unit";
+    const itemMetadata = {
+      ingredient_name: ingredient,
+      quantity: requiredQty,
+      is_fresh_unprocessed: !ingredient.toLowerCase().includes("canned") && 
+                            !ingredient.toLowerCase().includes("sauce") && 
+                            !ingredient.toLowerCase().includes("paste") && 
+                            !ingredient.toLowerCase().includes("sachet") && 
+                            !ingredient.toLowerCase().includes("mix"),
+      custom_user_rules: customRule ? {
+        must_include_brand_or_keywords: customRule.include || "",
+        must_exclude_brand_or_keywords: customRule.exclude || "",
+        custom_instruction: customRule.customPrompt || ""
+      } : undefined
+    };
+
+    const itemCacheKey = JSON.stringify(itemMetadata);
+    if (nlpProfileCache[itemCacheKey]) {
+      console.log(`[Cache Hit] Single NLP Profile for: ${ingredient}`);
+      return res.json(nlpProfileCache[itemCacheKey]);
+    }
+
+    const profilePrompt = `We are optimizing grocery prices for the dish "${dish || "custom recipe"}".
+For the following ingredient (along with its metadata of expected quantity/portion size, raw status, and any custom user rules), analyze its physical characteristics to prevent supermarket search engine pollution. Supermarkets often return unrelated processed items containing or flavoured with the ingredient.
+For example:
+- Searching for "onion" may return "onion tortilla wraps", "French onion dip", "onion soup sachets", "onion rings", "potato chips onion flavour", or "spring onion crackers".
+- Searching for "beef mince" may return "beef burger patties", "beef mince pies", "beef sausages", "beef stock cubes", or "beef dog/cat food".
+- Searching "lemons" may return "lemon flavoured lozenges".
+
+You MUST strictly incorporate any user-specified custom rules. If they specify to exclude a brand (e.g. "Pam's") or product form (e.g. "soup sachet"), add those words (e.g., "pams", "soup", "sachet") to the negative_keywords. If they specify to include a keyword or brand (e.g. "organic"), add it to the positive_keywords.
+
+We want to isolate only the exact, core cooking ingredient intended for the dish given its portion/quantity suitable for human consumption.
+
+Define:
+1. "expected_category": A broad category like "Fresh Produce", "Fresh Meat", "Pantry", "Bakery", "Dairy", "Canned Goods".
+2. "positive_keywords": 2-4 words that MUST be present in the product name/brand or are highly specific to the ingredient (e.g. for "onion", ["onion", "onions"]).
+3. "negative_keywords": Words representing completely different or processed product forms, wraps, tortillas, soup mixes, chips, crackers, seasoning packets, medicine, fragrances, cleaning products, or pet foods to exclude (e.g., for "onion", avoid ["wrap", "wraps", "tortilla", "tortillas", "flatbread", "flatbreads", "chip", "chips", "crisp", "crisps", "soup", "sachet", "sachets", "mix", "mixes", "dip", "dips", "ring", "rings", "seasoning", "cracker", "crackers", "shampoo", "soap", "pet", "dog", "cat", "medicine", "detergent", "scent", "flavoured"]).
+4. "allowed_synonyms": Acceptable alternative names or synonyms (e.g., ["brown onion", "red onion", "white onion", "loose onion"]).
+
+Ingredient with metadata to analyze:
+${JSON.stringify(itemMetadata, null, 2)}
+
+Respond ONLY with a JSON object mapping to an object with "expected_category", "positive_keywords", "negative_keywords", and "allowed_synonyms". DO NOT wrap it in a nested key of the ingredient name, return the object directly.`;
+
+    const profileResponse = await ai.models.generateContent({
+      model: "gemini-3.1-flash-lite",
+      contents: profilePrompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            expected_category: { type: Type.STRING },
+            positive_keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+            negative_keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+            allowed_synonyms: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ["expected_category", "positive_keywords", "negative_keywords", "allowed_synonyms"]
+        }
+      }
+    });
+
+    if (profileResponse.text) {
+      const parsed = JSON.parse(profileResponse.text.trim());
+      nlpProfileCache[itemCacheKey] = parsed;
+      return res.json(parsed);
+    }
+    throw new Error("No response from Gemini");
+  } catch (err) {
+    console.error("Failed to generate single Gemini NLP profile:", err);
+    return res.json({
+      expected_category: "Pantry",
+      positive_keywords: [ingredient.toLowerCase()],
+      negative_keywords: [],
+      allowed_synonyms: []
+    });
+  }
+});
+
+
+// Endpoint to evaluate whether products match custom Gemini instruction / rule individually
+app.post("/api/evaluate-custom-instruction", async (req, res) => {
+  const { ingredient, customInstruction, products } = req.body;
+  if (!ingredient || !customInstruction || !products || !Array.isArray(products)) {
+    return res.status(400).json({ error: "Missing required fields (ingredient, customInstruction, products)" });
+  }
+
+  const cacheKey = `${ingredient.toLowerCase().trim()}::${customInstruction.toLowerCase().trim()}`;
+  if (!customInstructionCache[cacheKey]) {
+    customInstructionCache[cacheKey] = {};
+  }
+
+  const cachedResults = customInstructionCache[cacheKey];
+  const uncachedProducts = products.filter(p => cachedResults[p.name] === undefined);
+
+  if (uncachedProducts.length > 0) {
+    if (!ai) {
+      // Fallback if no AI is configured
+      uncachedProducts.forEach(p => {
+        cachedResults[p.name] = true;
+      });
+    } else {
+      try {
+        const evaluationPrompt = `We are optimizing grocery pricing for the ingredient "${ingredient}".
+The user has provided this custom rule/instruction: "${customInstruction}".
+
+Evaluate each of the following supermarket products to see if they match/meet this custom rule/instruction.
+Analyze the product's name, brand, units, and price.
+
+For example:
+- If the instruction is "only use organic", then only products with "organic" in their name or brand should match (true), and others should not (false).
+- If the instruction is "exclude Pam's brand", then products with brand "Pam's" (or "Pams" in name/brand) should not match (false), and others should match (true).
+- If the instruction is "must be under $5", then products with price under 5.00 should match (true).
+- If the instruction is "only use free range", then only products with "free range" or "freerange" in their name should match (true).
+
+Products to evaluate:
+${JSON.stringify(uncachedProducts.map(p => ({ name: p.name, brand: p.brand, units: p.units, price: p.price })), null, 2)}
+
+Respond with a JSON array of objects, each containing the exact "product_name" and a "matched" boolean (true if it meets the custom rule, false otherwise).`;
+
+        const evaluationResponse = await ai.models.generateContent({
+          model: "gemini-3.1-flash-lite",
+          contents: evaluationPrompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  product_name: { type: Type.STRING },
+                  matched: { type: Type.BOOLEAN }
+                },
+                required: ["product_name", "matched"]
+              }
+            }
+          }
+        });
+
+        if (evaluationResponse.text) {
+          const parsed = JSON.parse(evaluationResponse.text.trim());
+          if (Array.isArray(parsed)) {
+            parsed.forEach((item: any) => {
+              if (item && item.product_name !== undefined && item.matched !== undefined) {
+                cachedResults[item.product_name] = !!item.matched;
+              }
+            });
+          }
+        }
+
+        // Fill any products that failed to be evaluated as safety fallback
+        uncachedProducts.forEach(p => {
+          if (cachedResults[p.name] === undefined) {
+            cachedResults[p.name] = true;
+          }
+        });
+      } catch (err) {
+        console.error("Failed to evaluate custom instruction via Gemini:", err);
+        uncachedProducts.forEach(p => {
+          cachedResults[p.name] = true;
+        });
+      }
+    }
+  }
+
+  // Build the final response mapping product names to matched boolean
+  const responseMap: Record<string, boolean> = {};
+  products.forEach(p => {
+    responseMap[p.name] = cachedResults[p.name] !== undefined ? cachedResults[p.name] : true;
+  });
+
+  return res.json(responseMap);
 });
 
 

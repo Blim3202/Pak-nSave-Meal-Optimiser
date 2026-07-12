@@ -2,6 +2,7 @@ import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import { divIcon } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 import React, { useState, useEffect, useRef } from "react";
 import { 
@@ -196,6 +197,11 @@ export default function App() {
       // If currently matched (true), toggle to exclude.
       // If currently not matched (false), toggle to include.
       next[productName] = currentlyMatched ? 'exclude' : 'include';
+      
+      setTimeout(() => {
+        recalculateLocalOptimization(customRules, next, optResults?.nlpProfiles || {});
+      }, 0);
+
       return next;
     });
   };
@@ -204,6 +210,11 @@ export default function App() {
     setProductOverrides(prev => {
       const next = { ...prev };
       delete next[productName];
+
+      setTimeout(() => {
+        recalculateLocalOptimization(customRules, next, optResults?.nlpProfiles || {});
+      }, 0);
+
       return next;
     });
   };
@@ -257,6 +268,7 @@ export default function App() {
   const [excludeInput, setExcludeInput] = useState("");
   const [tunePrompt, setTunePrompt] = useState("");
   const [btnAnimation, setBtnAnimation] = useState(false);
+  const [customInstructionEvaluations, setCustomInstructionEvaluations] = useState<Record<string, Record<string, boolean>>>({});
 
   // Chat State
   const [chatMessage, setChatMessage] = useState("");
@@ -272,6 +284,324 @@ export default function App() {
   const addLog = (text: string) => {
     const time = new Date().toLocaleTimeString();
     setLogs((prev) => [...prev, { time, text }]);
+  };
+
+  // Recalculate optimization results and metrics instantly in the frontend based on priority of rules
+  const recalculateLocalOptimization = (
+    rules: Record<string, { include: string; exclude: string; customPrompt: string }>,
+    overrides: Record<string, 'include' | 'exclude'>,
+    nlpProfilesObj: any,
+    customEvalsObj?: Record<string, Record<string, boolean>>
+  ) => {
+    if (!optResults || !optResults.allFoundProducts || !optResults.nearbyStores) return;
+
+    const timestamp = () => `[${new Date().toLocaleTimeString()}]`;
+    addLog(`⚡ Starting local real-time smart refiltering...`);
+
+    const results: any[] = [];
+
+    // For each store and ingredient, we want to find the best match under the current rules
+    optResults.nearbyStores.forEach((store: any) => {
+      ingredients.forEach((ing) => {
+        const rawProducts = optResults.allFoundProducts[store.store_id]?.[ing.name] || [];
+        const profile = nlpProfilesObj[ing.name];
+        const rule = rules[ing.name];
+
+        // Filter products according to priority:
+        // 1. Manual Overrides
+        // 2. Custom Gemini Instructions (Individual true/false API evaluation)
+        // 3. Exclusions (Comma-separated custom exclusion list)
+        // 4. Inclusions (Comma-separated custom inclusion list)
+        // 5. Baseline AI NLP Profile
+        
+        let filtered = rawProducts.filter((p: any) => {
+          const override = overrides[p.name];
+          if (override === 'include') return true;
+          if (override === 'exclude') return false;
+
+          const pNameLower = p.name.toLowerCase();
+          const brandLower = (p.brand || "").toLowerCase();
+          const fullText = `${pNameLower} ${brandLower}`;
+
+          // Priority 2: Custom Gemini Instructions (evaluated true/false individually)
+          if (rule?.customPrompt) {
+            const evals = customEvalsObj ? customEvalsObj[ing.name] : customInstructionEvaluations[ing.name];
+            if (evals && evals[p.name] !== undefined) {
+              if (!evals[p.name]) {
+                return false;
+              }
+            }
+          }
+
+          // Priority 3: Exclusions (custom exclusion rules)
+          if (rule?.exclude) {
+            const excludeKeywords = rule.exclude.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+            for (const kw of excludeKeywords) {
+              if (pNameLower.includes(kw) || brandLower.includes(kw)) {
+                return false;
+              }
+            }
+          }
+
+          // Priority 4: Inclusions (custom inclusion rules)
+          if (rule?.include) {
+            const includeKeywords = rule.include.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+            if (includeKeywords.length > 0) {
+              const matchedInclude = includeKeywords.some((kw: string) => pNameLower.includes(kw) || brandLower.includes(kw));
+              if (!matchedInclude) {
+                return false;
+              }
+            }
+          }
+
+          // Priority 5: Baseline AI NLP Profile (represented by positive/negative keywords)
+          if (profile) {
+            const positiveKeywords = (profile.positive_keywords || []).map((w: any) => w.toLowerCase()).filter(Boolean);
+            const negativeKeywords = (profile.negative_keywords || []).map((w: any) => w.toLowerCase()).filter(Boolean);
+
+            // Strict Negative Keyword Check
+            const ingLower = ing.name.toLowerCase();
+            for (const neg of negativeKeywords) {
+              if (fullText.includes(neg) && !ingLower.includes(neg)) {
+                return false;
+              }
+            }
+
+            // Strict Positive Keyword Check
+            if (positiveKeywords.length > 0) {
+              const matchedCount = positiveKeywords.filter((k: string) => fullText.includes(k)).length;
+              if (matchedCount === 0) {
+                const hasSynonym = (profile.allowed_synonyms || []).some((syn: string) => syn && fullText.includes(syn.toLowerCase()));
+                if (!hasSynonym) {
+                  return false;
+                }
+              }
+            }
+          }
+
+          return true;
+        });
+
+        // Detailed console logging for the terminal logs
+        if (rule) {
+          if (rule.exclude) {
+            const excludeKeywords = rule.exclude.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+            excludeKeywords.forEach((kw: string) => {
+              const excludedProducts = rawProducts.filter((p: any) => {
+                const pNameLower = p.name.toLowerCase();
+                const brandLower = (p.brand || "").toLowerCase();
+                return pNameLower.includes(kw) || brandLower.includes(kw);
+              });
+              if (excludedProducts.length > 0) {
+                addLog(`[Filter Action] Excluding product containing '${kw}' from ingredient '${ing.name}' at ${store.name} (Filtered out: '${excludedProducts[0].name}').`);
+              }
+            });
+          }
+
+          if (rule.include) {
+            addLog(`[Filter Action] Applying custom inclusion keywords [${rule.include}] for ingredient '${ing.name}' at ${store.name}.`);
+          }
+        }
+
+        rawProducts.forEach((p: any) => {
+          const override = overrides[p.name];
+          if (override) {
+            addLog(`[Manual Override] Force-${override === 'include' ? 'including' : 'excluding'} product '${p.name}' for ingredient '${ing.name}' at ${store.name}.`);
+          }
+        });
+
+        // If all filtered out, fall back to avoid blank states
+        if (filtered.length === 0 && rawProducts.length > 0) {
+          filtered = rawProducts;
+        }
+
+        // Sort by portion cost to find the cheapest match
+        const sorted = [...filtered].sort((a, b) => a.portion_cost - b.portion_cost);
+        const bestMatch = sorted[0];
+
+        if (bestMatch) {
+          results.push({
+            store_id: store.store_id,
+            store: store.name,
+            distance_km: store.distance_km,
+            ingredient: ing.name,
+            qty_required: ing.qty,
+            name: bestMatch.name,
+            brand: bestMatch.brand,
+            price: bestMatch.price,
+            units: bestMatch.units,
+            unit_label: bestMatch.unit_label || "",
+            packs_needed: bestMatch.packs_needed || 1,
+            purchase_cost: bestMatch.purchase_cost,
+            portion_cost: bestMatch.portion_cost,
+            is_mock: bestMatch.is_mock
+          });
+        }
+      });
+    });
+
+    // Build comparison metrics
+    const storeTotals: Record<string, { totalPurchase: number; totalPortion: number; itemsCount: number; distance_km: number; allIngredientsFound: boolean }> = {};
+    optResults.nearbyStores.forEach((s: any) => {
+      storeTotals[s.name] = { totalPurchase: 0, totalPortion: 0, itemsCount: 0, distance_km: s.distance_km, allIngredientsFound: true };
+    });
+
+    const ingredientsFoundAtStore: Record<string, Set<string>> = {};
+    optResults.nearbyStores.forEach((s: any) => {
+      ingredientsFoundAtStore[s.name] = new Set<string>();
+    });
+
+    results.forEach(r => {
+      if (storeTotals[r.store] && r.purchase_cost > 0) {
+        storeTotals[r.store].totalPurchase += r.purchase_cost;
+        storeTotals[r.store].totalPortion += r.portion_cost;
+        storeTotals[r.store].itemsCount += 1;
+        ingredientsFoundAtStore[r.store].add(r.ingredient);
+      }
+    });
+
+    const totalIngredients = ingredients.length;
+    Object.keys(storeTotals).forEach(storeName => {
+      if (ingredientsFoundAtStore[storeName].size < totalIngredients) {
+        storeTotals[storeName].allIngredientsFound = false;
+      }
+    });
+
+    const eligibleStores = Object.entries(storeTotals)
+      .filter(([_, val]) => val.allIngredientsFound)
+      .map(([name, val]) => ({
+        store: name,
+        total_purchase: parseFloat(val.totalPurchase.toFixed(2)),
+        total_portion: parseFloat(val.totalPortion.toFixed(2)),
+        items_found: val.itemsCount,
+        distance_km: parseFloat(val.distance_km.toFixed(2)),
+        all_ingredients_found: true
+      }))
+      .sort((a, b) => a.total_purchase - b.total_purchase);
+
+    const storesSummary = eligibleStores.length > 0 ? eligibleStores : Object.entries(storeTotals).map(([name, val]) => ({
+      store: name,
+      total_purchase: parseFloat(val.totalPurchase.toFixed(2)),
+      total_portion: parseFloat(val.totalPortion.toFixed(2)),
+      items_found: val.itemsCount,
+      distance_km: parseFloat(val.distance_km.toFixed(2)),
+      all_ingredients_found: val.allIngredientsFound
+    })).sort((a, b) => a.total_purchase - b.total_purchase);
+
+    const cheapestSingleStore = storesSummary[0] || { store: "N/A", total_purchase: 0, total_portion: 0, distance_km: 0, items_found: 0, all_ingredients_found: false };
+
+    // Multi-Store Optimal
+    let optimizedTotalPurchase = 0;
+    let optimizedTotalPortion = 0;
+
+    ingredients.forEach(ing => {
+      const ingMatches = results.filter(r => r.ingredient === ing.name);
+      if (ingMatches.length > 0) {
+        ingMatches.sort((a, b) => a.purchase_cost - b.purchase_cost);
+        const best = ingMatches[0];
+        optimizedTotalPurchase += best.purchase_cost;
+        optimizedTotalPortion += best.portion_cost;
+      }
+    });
+
+    optimizedTotalPurchase = parseFloat(optimizedTotalPurchase.toFixed(2));
+    optimizedTotalPortion = parseFloat(optimizedTotalPortion.toFixed(2));
+
+    const totalSavings = parseFloat((cheapestSingleStore.total_purchase - optimizedTotalPurchase).toFixed(2));
+    const savingsPct = cheapestSingleStore.total_purchase > 0 
+      ? parseFloat(((totalSavings / cheapestSingleStore.total_purchase) * 100).toFixed(1))
+      : 0;
+
+    addLog(`[Refiltered Results] Single-store cheapest: ${cheapestSingleStore.store} ($${cheapestSingleStore.total_purchase.toFixed(2)}).`);
+    addLog(`[Refiltered Results] Optimized mix-store total: $${optimizedTotalPurchase.toFixed(2)}. Potential Savings: $${totalSavings.toFixed(2)} (${savingsPct}%).`);
+
+    // Update product matching status recursively
+    const updatedAllFoundProducts = { ...optResults.allFoundProducts };
+    optResults.nearbyStores.forEach((store: any) => {
+      ingredients.forEach((ing) => {
+        const rawProducts = optResults.allFoundProducts[store.store_id]?.[ing.name] || [];
+        const profile = nlpProfilesObj[ing.name];
+        const rule = rules[ing.name];
+
+        updatedAllFoundProducts[store.store_id][ing.name] = rawProducts.map((p: any) => {
+          const override = overrides[p.name];
+          let matched = p.is_matched;
+          if (override === 'include') matched = true;
+          else if (override === 'exclude') matched = false;
+          else {
+            const pNameLower = p.name.toLowerCase();
+            const brandLower = (p.brand || "").toLowerCase();
+            const fullText = `${pNameLower} ${brandLower}`;
+
+            // Priority 2: Custom Gemini Instructions
+            if (rule?.customPrompt) {
+              const evals = customEvalsObj ? customEvalsObj[ing.name] : customInstructionEvaluations[ing.name];
+              if (evals && evals[p.name] !== undefined) {
+                if (!evals[p.name]) {
+                  matched = false;
+                }
+              }
+            }
+
+            // Priority 5: Baseline AI NLP Profile
+            if (profile) {
+              const positiveKeywords = (profile.positive_keywords || []).map((w: any) => w.toLowerCase()).filter(Boolean);
+              const negativeKeywords = (profile.negative_keywords || []).map((w: any) => w.toLowerCase()).filter(Boolean);
+              const ingLower = ing.name.toLowerCase();
+
+              for (const neg of negativeKeywords) {
+                if (fullText.includes(neg) && !ingLower.includes(neg)) {
+                  matched = false;
+                }
+              }
+              if (positiveKeywords.length > 0) {
+                const matchedCount = positiveKeywords.filter((k: string) => fullText.includes(k)).length;
+                if (matchedCount === 0) {
+                  const hasSynonym = (profile.allowed_synonyms || []).some((syn: string) => syn && fullText.includes(syn.toLowerCase()));
+                  if (!hasSynonym) {
+                    matched = false;
+                  }
+                }
+              }
+            }
+
+            // Priority 3: Exclusions
+            if (rule?.exclude) {
+              const excludeKeywords = rule.exclude.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+              if (excludeKeywords.some((kw: string) => pNameLower.includes(kw) || brandLower.includes(kw))) {
+                matched = false;
+              }
+            }
+            // Priority 4: Inclusions
+            if (rule?.include) {
+              const includeKeywords = rule.include.split(',').map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+              if (includeKeywords.length > 0) {
+                const matchedInclude = includeKeywords.some((kw: string) => pNameLower.includes(kw) || brandLower.includes(kw));
+                if (!matchedInclude) {
+                  matched = false;
+                }
+              }
+            }
+          }
+          return { ...p, is_matched: matched };
+        });
+      });
+    });
+
+    setOptResults((prev: any) => ({
+      ...prev,
+      results,
+      storesSummary,
+      cheapestSingleStore,
+      optimizedTotalPurchase,
+      optimizedTotalPortion,
+      totalSavings,
+      savingsPct,
+      allFoundProducts: updatedAllFoundProducts,
+      nlpProfiles: nlpProfilesObj
+    }));
+
+    addLog("✅ Real-time local filtering and recalculations completed successfully!");
   };
 
   // Scroll logs to bottom within their own container
@@ -617,7 +947,7 @@ export default function App() {
     setExcludeInput("");
   };
 
-  const applyCustomRulesForIngredient = (ingName: string) => {
+  const applyCustomRulesForIngredient = async (ingName: string) => {
     // If there is still text typed but not yet committed as a tag, treat it as a tag
     let finalIncludes = [...tuneIncludeTags];
     if (includeInput.trim()) {
@@ -638,19 +968,20 @@ export default function App() {
     const includeStr = finalIncludes.join(',');
     const excludeStr = finalExcludes.join(',');
 
-    const hasFilters = includeStr.trim() || excludeStr.trim() || tunePrompt.trim();
-    addLog(`Applying custom AI filters for "${ingName}"...`);
+    addLog(`Applying custom rules for "${ingName}" without restarting the pipeline...`);
     setBtnAnimation(true);
     setTimeout(() => setBtnAnimation(false), 2000);
     setRenderTrigger(prev => prev + 1);
 
+    const updatedRule = {
+      include: includeStr,
+      exclude: excludeStr,
+      customPrompt: tunePrompt
+    };
+
     const updatedRules = {
       ...customRules,
-      [ingName]: {
-        include: includeStr,
-        exclude: excludeStr,
-        customPrompt: tunePrompt
-      }
+      [ingName]: updatedRule
     };
     setCustomRules(updatedRules);
 
@@ -660,10 +991,69 @@ export default function App() {
     setIncludeInput("");
     setExcludeInput("");
 
-    if (hasFilters) {
-      runOptimization(updatedRules);
+    // If custom instructions (customPrompt) are specified, call our brand new individual evaluation API
+    if (tunePrompt.trim()) {
+      addLog(`[Gemini custom instructions] Extracting products for "${ingName}" to individually evaluate them...`);
+      const allProductsForIngName: any[] = [];
+      const seenProductNames = new Set<string>();
+
+      if (optResults && optResults.allFoundProducts && optResults.nearbyStores) {
+        optResults.nearbyStores.forEach((store: any) => {
+          const storeProducts = optResults.allFoundProducts[store.store_id]?.[ingName] || [];
+          storeProducts.forEach((p: any) => {
+            if (!seenProductNames.has(p.name)) {
+              seenProductNames.add(p.name);
+              allProductsForIngName.push({
+                name: p.name,
+                brand: p.brand,
+                units: p.units,
+                price: p.price
+              });
+            }
+          });
+        });
+      }
+
+      addLog(`[Gemini custom instructions] Found ${allProductsForIngName.length} unique products. Calling Gemini API to individually filter by instruction: "${tunePrompt}"...`);
+      setLoading(true);
+      try {
+        const evaluateRes = await fetch("/api/evaluate-custom-instruction", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ingredient: ingName,
+            customInstruction: tunePrompt,
+            products: allProductsForIngName
+          })
+        });
+
+        if (evaluateRes.ok) {
+          const evaluationMap = await evaluateRes.json();
+          
+          // Compute updated evaluations
+          const nextEvaluations = {
+            ...customInstructionEvaluations,
+            [ingName]: evaluationMap
+          };
+          setCustomInstructionEvaluations(nextEvaluations);
+
+          const matchedCount = Object.values(evaluationMap).filter(Boolean).length;
+          addLog(`[Gemini custom instructions] individual product filter complete! ${matchedCount} / ${allProductsForIngName.length} products matched custom rules.`);
+          
+          recalculateLocalOptimization(updatedRules, productOverrides, optResults?.nlpProfiles || {}, nextEvaluations);
+        } else {
+          addLog(`[Error] Failed to fetch updated Gemini product evaluations for "${ingName}". Using local keywords only.`);
+          recalculateLocalOptimization(updatedRules, productOverrides, optResults?.nlpProfiles || {});
+        }
+      } catch (err) {
+        addLog(`[Error] Failed to fetch updated Gemini product evaluations for "${ingName}": ${err instanceof Error ? err.message : String(err)}`);
+        recalculateLocalOptimization(updatedRules, productOverrides, optResults?.nlpProfiles || {});
+      } finally {
+        setLoading(false);
+      }
     } else {
-      addLog(`No custom filters entered — using existing NLP results.`);
+      // For immediate inclusions/exclusions/overrides, run local refiltering instantly
+      recalculateLocalOptimization(updatedRules, productOverrides, optResults?.nlpProfiles || {});
     }
   };
 
@@ -676,8 +1066,43 @@ export default function App() {
     setIncludeInput("");
     setExcludeInput("");
     setTunePrompt("");
+    
+    // Clear evaluations as well
+    const nextEvaluations = { ...customInstructionEvaluations };
+    delete nextEvaluations[ingName];
+    setCustomInstructionEvaluations(nextEvaluations);
+
     addLog(`Resetting custom filters for "${ingName}" to default NLP heuristics.`);
-    runOptimization(updatedRules);
+    
+    // Fetch default clean profile in background if we had a custom instruction, otherwise just recalculate
+    if (optResults?.nlpProfiles?.[ingName]) {
+      setLoading(true);
+      fetch("/api/nlp-profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dish: isCustomDish ? customDish : selectedDish,
+          ingredient: ingName,
+          quantity: ingredients.find(i => i.name === ingName)?.qty || "1 unit"
+        })
+      })
+      .then(res => res.json())
+      .then(profile => {
+        const nextNlpProfiles = {
+          ...(optResults?.nlpProfiles || {}),
+          [ingName]: profile
+        };
+        recalculateLocalOptimization(updatedRules, productOverrides, nextNlpProfiles, nextEvaluations);
+      })
+      .catch(() => {
+        recalculateLocalOptimization(updatedRules, productOverrides, optResults?.nlpProfiles || {}, nextEvaluations);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+    } else {
+      recalculateLocalOptimization(updatedRules, productOverrides, optResults?.nlpProfiles || {}, nextEvaluations);
+    }
   };
 
   const updateIngredientName = (index: number, newName: string) => {
@@ -856,9 +1281,15 @@ export default function App() {
   const renderAIReport = (markdownText: string) => {
     if (!markdownText) return <p className="text-xs text-slate-400">Analyzing data...</p>;
     
+    // Ensure there is always a blank line before and after a table block to force standard GFM parsing
+    let processedText = markdownText
+      .replace(/([^\n])\n\|/g, "$1\n\n|")
+      .replace(/\|\n([^\n|])/g, "|\n\n$1");
+
     return (
       <div className="markdown-body prose prose-slate max-w-none text-xs text-slate-700 leading-relaxed">
         <Markdown
+          remarkPlugins={[remarkGfm]}
           components={{
             h1: ({ children, ...props }: any) => <h1 {...props} className="text-lg font-bold text-slate-950 mt-6 mb-3 border-b border-slate-200 pb-1">{children}</h1>,
             h2: ({ children, ...props }: any) => <h2 {...props} className="text-md font-bold text-slate-900 mt-5 mb-2 border-b border-slate-100 pb-1">{children}</h2>,
@@ -872,9 +1303,21 @@ export default function App() {
             em: ({ children, ...props }: any) => <em {...props} className="italic text-slate-600">{children}</em>,
             blockquote: ({ children, ...props }: any) => <blockquote {...props} className="border-l-4 border-slate-200 pl-4 italic text-slate-500 my-2">{children}</blockquote>,
             code: ({ children, ...props }: any) => <code {...props} className="font-mono text-[10px] bg-slate-100 px-1 py-0.5 rounded text-slate-800">{children}</code>,
+            table: ({ children, ...props }: any) => (
+              <div className="overflow-x-auto my-4 border border-slate-200 rounded-lg shadow-2xs">
+                <table {...props} className="min-w-full divide-y divide-slate-200 text-xs text-left">
+                  {children}
+                </table>
+              </div>
+            ),
+            thead: ({ children, ...props }: any) => <thead {...props} className="bg-slate-50">{children}</thead>,
+            tbody: ({ children, ...props }: any) => <tbody {...props} className="divide-y divide-slate-100 bg-white">{children}</tbody>,
+            tr: ({ children, ...props }: any) => <tr {...props} className="hover:bg-slate-50/50 transition-colors">{children}</tr>,
+            th: ({ children, ...props }: any) => <th {...props} className="px-3 py-2 font-bold text-slate-800 border-b border-slate-200 text-[10px] uppercase tracking-wider">{children}</th>,
+            td: ({ children, ...props }: any) => <td {...props} className="px-3 py-2 text-slate-600 text-[11px] font-medium">{children}</td>,
           }}
         >
-          {markdownText}
+          {processedText}
         </Markdown>
       </div>
     );
@@ -2483,6 +2926,49 @@ export default function App() {
                             <p className="text-[10px] text-slate-400 mt-1 font-medium leading-relaxed">
                               Define custom include/exclude rules. These will be sent directly to the Gemini NLP Agent to generate the precise positive/negative profile filters.
                             </p>
+                          </div>
+
+                          <div className="bg-slate-50 border border-slate-200/60 rounded-xl p-3 text-[10px] text-slate-600 space-y-1.5 shadow-2xs">
+                            <span className="font-bold text-slate-800 uppercase tracking-wider block border-b border-slate-200/50 pb-1 text-[9px]">
+                              Rule Execution Priority Hierarchy
+                            </span>
+                            <div className="space-y-1.5">
+                              <div className="flex items-start gap-2">
+                                <span className="bg-red-600 text-white w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold shrink-0 mt-0.5">1</span>
+                                <div>
+                                  <span className="font-bold text-red-600">Manual Product Overrides</span>
+                                  <p className="text-slate-400 text-[9px]">Forced inclusion or exclusion toggled directly on individual products (overrules all rules).</p>
+                                </div>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <span className="bg-orange-600 text-white w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold shrink-0 mt-0.5">2</span>
+                                <div>
+                                  <span className="font-bold text-orange-800">Custom Gemini Instructions</span>
+                                  <p className="text-slate-400 text-[9px]">AI reads target product metadata (name, brand, units, price) individually and returns true/false filter decisions.</p>
+                                </div>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <span className="bg-orange-500 text-white w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold shrink-0 mt-0.5">3</span>
+                                <div>
+                                  <span className="font-bold text-orange-700">Must Exclude Rules</span>
+                                  <p className="text-slate-400 text-[9px]">Strict keyword or brand terms that immediately discard matching products.</p>
+                                </div>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <span className="bg-amber-500 text-white w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold shrink-0 mt-0.5">4</span>
+                                <div>
+                                  <span className="font-bold text-amber-700">Must Include Rules</span>
+                                  <p className="text-slate-400 text-[9px]">Requires that products contain at least one of these exact text tags.</p>
+                                </div>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <span className="bg-yellow-400 text-slate-950 w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold shrink-0 mt-0.5">5</span>
+                                <div>
+                                  <span className="font-bold text-yellow-800">Baseline AI NLP Profile</span>
+                                  <p className="text-slate-400 text-[9px]">Standard semantic keyword matches and category alignments.</p>
+                                </div>
+                              </div>
+                            </div>
                           </div>
 
                           <div className="space-y-4 text-xs">
