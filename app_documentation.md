@@ -26,7 +26,7 @@ The application is structured as a high-density, single-screen dashboard using a
 | - Store Distance Slider    | - Cheapest Single Store vs. Mix & Match Matrix     |
 |                            | - Cost Savings Metrics & Visualization Chart       |
 +----------------------------+----------------------------+-----------------------+
-| 2. Dish Selection & Serves | 5. Shopping Checklist     | 6. Interactive Map    |
+| 2. Dish Selection & Serves | 5. Shopping Checklist      | 6. Interactive Map    |
 | - Preset or Custom Input   | - Portion-cost checklist   | - Store Pinpoints     |
 | - Serving Adjuster (1-12)  | - Store selectors          | - Route indicators    |
 +----------------------------+----------------------------+-----------------------+
