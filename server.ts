@@ -1525,9 +1525,10 @@ const startServer = async () => {
   // If in production, serve built index.html
   if (process.env.NODE_ENV === "production" || process.env.VITE_PROD === "true") {
     console.log("Starting server in PRODUCTION mode...");
-    app.use(express.static(path.join(__dirname, "dist")));
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
+      res.sendFile(path.join(distPath, "index.html"));
     });
   } else {
     console.log("Starting server in DEVELOPMENT mode with Vite Middleware...");

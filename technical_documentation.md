@@ -38,7 +38,7 @@ The dev environment and production build system are optimized for instant compil
 - **Production Build**: 
   1. The client assets are compiled using `vite build`, writing static production bundles into the `/dist` folder.
   2. The server-side code is bundled into a single self-contained CommonJS file (`dist/server.cjs`) using `esbuild` with the `--packages=external` flag. This bundler compiles all backend modules while keeping third-party Node packages external, completely bypassing relative import issues at runtime.
-  3. The production container launches the app using `node dist/server.cjs`, serving the static React bundles and proxying API calls.
+  3. The production container launches the app using `node dist/server.cjs`, serving the static React bundles and proxying API calls. Crucially, the production static asset routing utilizes `process.cwd()` instead of `__dirname` to ensure paths resolve relative to the project workspace root, preventing nested `/dist/dist` resolution errors that occur with Bundled CommonJS outputs.
 
 ### Low-Latency NDJSON Streaming
 The core `/api/optimize` endpoint uses **NDJSON (Newline Delimited JSON)** streaming. This allows the server to send step-by-step progress logs to the frontend as they happen (e.g., geocoding results, NLP profile generation, individual store scanning) and stream the final optimization payload at the end of the connection. The frontend reads this stream using the `ReadableStream` reader interface, updating the active terminal logs line-by-line without blocking the browser thread.
