@@ -187,6 +187,7 @@ const getBrandBadgeStyle = (brand: string) => {
 export default function App() {
   // Inputs state
   const [address, setAddress] = useState("Botany Town Centre, Auckland");
+  const [showNewVersionModal, setShowNewVersionModal] = useState(true);
 
   // State for manual product overrides - persistent
   const [productOverrides, setProductOverrides] = useState<Record<string, 'include' | 'exclude'>>({});
@@ -1412,6 +1413,56 @@ export default function App() {
                 className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
               >
                 Dismiss Error
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NEW VERSION NOTIFICATION POPUP */}
+      {showNewVersionModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[10000] p-4">
+          <div className="bg-white rounded-2xl border border-slate-100 max-w-lg w-full p-6 sm:p-8 shadow-2xl animate-in fade-in zoom-in-95 duration-200 flex flex-col items-center text-center">
+            <div className="bg-emerald-50 text-emerald-600 p-4 rounded-full shrink-0 mb-5 shadow-inner">
+              <Sparkles className="w-8 h-8 animate-pulse" />
+            </div>
+            
+            <h3 className="text-md sm:text-lg font-black text-slate-900 uppercase tracking-wide mb-3">
+              A new app is available
+            </h3>
+            
+            <p className="text-xs text-slate-600 leading-relaxed font-medium mb-6">
+              This updated app supports <span className="font-bold text-slate-800">Pak'nSave</span>, <span className="font-bold text-slate-800">New World</span>, and <span className="font-bold text-slate-800">Woolworths</span> stores nationwide, and improves multi-threaded requests and LLM ingredient optimisation.
+            </p>
+
+            <div className="w-full bg-slate-50 border border-slate-150 rounded-xl p-4 mb-6 text-left">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                Click the link below to proceed
+              </span>
+              <a 
+                href="https://nz-meal-cost-optimiser-496619532397.australia-southeast2.run.app/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-bold text-emerald-600 hover:text-emerald-700 break-all underline decoration-2 underline-offset-4 flex items-center gap-1.5"
+              >
+                https://nz-meal-cost-optimiser-496619532397.australia-southeast2.run.app/
+                <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+              </a>
+            </div>
+
+            <div className="w-full flex flex-col gap-2.5">
+              <a
+                href="https://nz-meal-cost-optimiser-496619532397.australia-southeast2.run.app/"
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all shadow-md hover:shadow-emerald-100 hover:scale-[1.01] active:scale-95 text-center cursor-pointer flex items-center justify-center gap-2"
+              >
+                Go to New Application
+              </a>
+              
+              <button
+                onClick={() => setShowNewVersionModal(false)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[11px] font-semibold tracking-wide border border-slate-200/80 transition-all cursor-pointer active:scale-98"
+              >
+                Continue with the Pak'nsave demo app
               </button>
             </div>
           </div>
